@@ -1059,7 +1059,7 @@ export async function sevenShifts(ctx) {
   const synced = data.sync.map((r) => r.synced_at).sort().pop();
   const node = h('div', {},
     h('div', { class: 'notice' },
-      `Scheduled = published 7shifts shifts (open shifts counted separately).${hasActual ? ' Actual = 7shifts time punches.' : ''} Salaried managers' hours are included; their pay is not hours × wage. Last 7shifts sync ${new Date(synced).toLocaleString()}.`),
+      `Scheduled = published 7shifts shifts (open shifts counted separately).${hasActual ? ' Actual = 7shifts time punches.' : ''} Salaried managers' hours are included, and their pay is spread over their allocation days as in 7shifts. Last 7shifts sync ${new Date(synced).toLocaleString()}.`),
     h('div', { class: 'grid kpis' }, tiles),
     card(hasActual ? 'Scheduled vs actual by day' : 'Scheduled by day', fmtRange(ctx.q.current), metricSeg, dailyEl),
     card('By location', fmtRange(ctx.q.current), csvButton(() => locTable), locTable.el),

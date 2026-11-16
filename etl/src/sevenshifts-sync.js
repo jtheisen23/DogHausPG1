@@ -14,7 +14,8 @@
 // every synced day is replaced. Hours include salaried people's punches, as
 // in 7shifts; cost is hourly punches x wage, overtime past 40 h per employee
 // per workweek (SEVENSHIFTS_WEEK_START, default 1 = Monday) across all
-// locations, plus salaried pay from each location's salariedLaborPerDay.
+// locations, plus salaried pay from 7shifts wages spread over days and
+// locations the way 7shifts does (salariedLaborPerDay only as a fallback).
 //
 // Environment: SEVENSHIFTS_ACCESS_TOKEN, LOCATIONS_JSON (or config/locations.json),
 //   CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, D1_DATABASE_ID
@@ -24,8 +25,8 @@ import { parseArgs } from 'node:util';
 import { addDays, parseDate, todayIn } from './dates.js';
 import { loadLocations } from './config.js';
 import {
-  aggregateShifts, allocateOvertime, effectiveWageCents, hourlyWageCents, isSalaried, laborStatements, localDate, localMidnightUtc,
-  matchLocations, punchHours, punchLaborRows, SevenShiftsClient, weekStartOf, weekStartSetting,
+  addSalaries, aggregateShifts, allocateOvertime, effectiveWageCents, hourlyWageCents, isSalaried, laborStatements, localDate, localMidnightUtc,
+  matchLocations, notePresence, punchHours, punchLaborRows, salariedPay, SCHEDULED_ROW, SevenShiftsClient, weekStartOf, weekStartSetting,
 } from './sevenshifts.js';
 import { lit } from './sql.js';
 import { D1Sink, FileSink } from './sink.js';
@@ -93,22 +94,25 @@ async function main() {
     if (labor?.has(loc.id)) {
       const l = labor.get(loc.id);
       try {
-        await sink.write(laborStatements(loc.id, l.start, l.end, l.rows, loc.salariedLaborPerDay));
+        // Salaried pay comes from 7shifts wages, as in 7shifts; the configured
+        // salariedLaborPerDay is only a fallback when 7shifts has no salaries.
+        const configured = l.salaryFrom7shifts ? 0 : loc.salariedLaborPerDay;
+        if (l.salaryFrom7shifts && Number(loc.salariedLaborPerDay) > 0) log(`${loc.id}: salariedLaborPerDay ignored; salaried pay comes from 7shifts wages`);
+        await sink.write(laborStatements(loc.id, l.start, l.end, l.rows, configured));
         const hours = l.rows.reduce((s, r) => s + r.regular_hours + r.overtime_hours, 0);
-        const cost = l.rows.reduce((s, r) => s + r.regular_cost + r.overtime_cost, 0);
         const salariedHours = l.rows.reduce((s, r) => s + r.salaried_hours, 0);
-        log(`${loc.id} actual labor: ${l.start} .. ${l.end}, ${l.days.length} day(s) with punches, ${l.punches} punches, ${hours.toFixed(1)} h, $${cost.toFixed(2)} hourly pay${l.salaried ? ` (${l.salaried} salaried punches: ${salariedHours.toFixed(1)} h, no hourly pay)` : ''}`);
+        // Only hourly pay is logged: the log is public, and salaried pay is a few people's salaries.
+        log(`${loc.id} actual labor: ${l.start} .. ${l.end}, ${l.days.length} day(s) with punches, ${l.punches} punches, ${hours.toFixed(1)} h, $${l.hourlyCost.toFixed(2)} hourly pay${l.salaried ? `; ${l.salaried} salaried punches (${salariedHours.toFixed(1)} h)` : ''}${l.salaryFrom7shifts ? '; salaried pay added from 7shifts wages (not shown)' : ''}`);
       } catch (err) {
         failures++;
         log(`${loc.id} actual labor: FAILED - ${err.message}`);
       }
     }
     try {
-      const rows = await syncLocation(client, company.id, remote, tz, start, end, wagesOf);
+      const { rows, hourlyCost, salariedPeople } = await syncLocation(client, company.id, remote, tz, start, end, wagesOf);
       await sink.write(statements(loc.id, start, end, rows));
       const hours = rows.reduce((s, r) => s + r.hours, 0);
-      const cost = rows.reduce((s, r) => s + r.cost, 0);
-      log(`${loc.id} <- 7shifts "${remote.name}": ${start} .. ${end}, ${rows.length} rows, ${hours.toFixed(1)} h, $${cost.toFixed(2)} scheduled`);
+      log(`${loc.id} <- 7shifts "${remote.name}": ${start} .. ${end}, ${rows.length} rows, ${hours.toFixed(1)} h, $${hourlyCost.toFixed(2)} scheduled hourly pay${salariedPeople ? ' + salaried pay (not shown)' : ''}`);
     } catch (err) {
       failures++;
       log(`${loc.id}: FAILED - ${err.message}`);
@@ -153,15 +157,24 @@ function wageLookup(client, companyId) {
   return wagesOf;
 }
 
+/**
+ * Scheduled labor for one location from start to end: published shifts by
+ * date and role, hourly shifts at hours x wage, plus the salaried pay of the
+ * salaried people scheduled each workweek, spread the way 7shifts spreads it.
+ * Returns { rows, hourlyCost, salariedPeople }.
+ */
 async function syncLocation(client, companyId, remote, tz, start, end, wagesOf) {
+  const weekStart = weekStartSetting(process.env.SEVENSHIFTS_WEEK_START);
   const roleRows = await client.roles(companyId, remote.id);
   const roles = new Map(roleRows.map((r) => [r.id, r.name]));
-  const shifts = await client.shifts(
+  // From the start of the first workweek, to see who is scheduled each week.
+  const weekShifts = await client.shifts(
     companyId,
     remote.id,
-    localMidnightUtc(start, tz).toISOString(),
+    localMidnightUtc(weekStartOf(start, weekStart), tz).toISOString(),
     new Date(localMidnightUtc(addDays(end, 1), tz).getTime() - 1000).toISOString(),
   );
+  const shifts = weekShifts.filter((s) => localDate(s.start, tz) >= start);
 
   // Shifts without a wage on them fall back to the employee's current hourly
   // wage for that role. Salaried people's shifts count as hours only, as in actual labor.
@@ -172,7 +185,19 @@ async function syncLocation(client, companyId, remote, tz, start, end, wagesOf) 
   // salaried people have their salary entered as an "hourly" 7shifts wage.
   const salaried = (s) => !!s.user_id && !s.open
     && isSalaried(wages.get(s.user_id), s.role_id, effectiveWageCents(wages.get(s.user_id), s.role_id, s.hourly_wage));
-  return aggregateShifts(shifts, { timeZone: tz, roles, wageFor, excludedRoles: EXCLUDED_ROLES, salaried });
+  const rows = aggregateShifts(shifts, { timeZone: tz, roles, wageFor, excludedRoles: EXCLUDED_ROLES, salaried });
+  const hourlyCost = rows.reduce((s, r) => s + r.cost, 0);
+
+  const presence = new Map();
+  for (const s of weekShifts) {
+    if (s.deleted || s.soft_deleted || s.draft || s.open || !s.user_id) continue;
+    const hours = (Date.parse(s.end) - Date.parse(s.start)) / 3600000;
+    if (hours > 0) notePresence(presence, s.user_id, weekStartOf(localDate(s.start, tz), weekStart), remote.id, hours);
+  }
+  const pay = await salariedPay(presence, { wagesOf, roleName: (id) => roles.get(id) || 'Salaried', start, end });
+  for (const issue of pay.issues) log(`  salaried pay: ${issue}`);
+  addSalaries(rows, pay.rows.filter((x) => x.remoteId === remote.id), SCHEDULED_ROW);
+  return { rows, hourlyCost, salariedPeople: pay.people };
 }
 
 /**
@@ -190,6 +215,8 @@ async function punchLabor(client, companyId, remoteLocations, pairs, wagesOf, ra
   const ranges = new Map();
   const salariedByRemote = new Map();
   const daysByRemote = new Map(); // days with any closed punch (reported in the log)
+  const allRoles = new Map(); // 7shifts role id -> name, every location
+  const presence = new Map(); // who worked where each workweek (for salaried pay)
   for (const r of remoteLocations) {
     const pair = pairs.find((p) => p.remote?.id === r.id);
     const tz = pair?.loc.timezone || r.timezone || 'America/New_York';
@@ -206,6 +233,7 @@ async function punchLabor(client, companyId, remoteLocations, pairs, wagesOf, ra
       new Date(localMidnightUtc(addDays(last, 1), tz).getTime() - 1000).toISOString(),
     );
     const roles = new Map((await client.roles(companyId, r.id)).map((x) => [x.id, x.name]));
+    for (const [id, name] of roles) allRoles.set(id, name);
     let salaried = 0;
     const days = new Set();
     for (const p of punches) {
@@ -214,6 +242,7 @@ async function punchLabor(client, companyId, remoteLocations, pairs, wagesOf, ra
       if (hours === null) continue; // still clocked in; a later sync picks it up
       const date = localDate(p.clocked_in, tz);
       if (date >= start && date <= last) days.add(date);
+      notePresence(presence, p.user_id, weekStartOf(date, weekStart), r.id, hours);
       const role = roles.get(p.role_id) || (p.role_id ? `Role ${p.role_id}` : 'No role');
       if (skip.has(role.trim().toLowerCase())) continue;
       const wages = await wagesOf(p.user_id);
@@ -229,15 +258,33 @@ async function punchLabor(client, companyId, remoteLocations, pairs, wagesOf, ra
   }
   allocateOvertime(items, { weekStart });
 
+  // Salaried pay of everyone salaried who worked each workweek, spread over
+  // days and locations from their 7shifts wage, as 7shifts does.
+  const allRanges = [...ranges.values()];
+  const pay = allRanges.length
+    ? await salariedPay(presence, {
+        wagesOf,
+        roleName: (id) => allRoles.get(id) || 'Salaried',
+        start: allRanges.map((x) => x.start).sort()[0],
+        end: allRanges.map((x) => x.end).sort().pop(),
+      })
+    : { rows: [], people: 0, issues: [] };
+  for (const issue of pay.issues) log(`Salaried pay: ${issue}`);
+
   const out = new Map();
   for (const { loc, remote } of pairs) {
     const range = remote && ranges.get(remote.id);
     if (!range) continue;
     const mine = items.filter((it) => it.remoteId === remote.id && it.date >= range.start && it.date <= range.end);
+    const rows = punchLaborRows(mine, { overtimeMultiplier });
+    const hourlyCost = rows.reduce((s, r) => s + r.regular_cost + r.overtime_cost, 0);
+    const salaries = pay.rows.filter((x) => x.remoteId === remote.id && x.date >= range.start && x.date <= range.end);
     out.set(loc.id, {
       ...range,
       days: daysByRemote.get(remote.id) || [],
-      rows: punchLaborRows(mine, { overtimeMultiplier }),
+      rows: addSalaries(rows, salaries),
+      hourlyCost,
+      salaryFrom7shifts: pay.people > 0,
       punches: mine.length,
       salaried: salariedByRemote.get(remote.id) || 0,
     });
@@ -454,7 +501,7 @@ async function compareWithReport(client, companyId, remoteLocations, pairs, out)
       out(`Day fields: ${days[0] ? Object.keys(days[0]).join(', ') : '(no days)'}; date field: ${dateKey ?? 'not found'}`);
       fieldsShown = true;
     }
-    const scheduled = await syncLocation(client, companyId, r, tz, start, end, wagesOf);
+    const { rows: scheduled } = await syncLocation(client, companyId, r, tz, start, end, wagesOf);
     const actual = labor.get(loc.id)?.rows || [];
     const byDate = new Map(days.map((d) => [String(d[dateKey] ?? '').slice(0, 10), d]));
     const sum = (rows, date, f) => rows.filter((x) => x.business_date === date).reduce((s, x) => s + f(x), 0);
@@ -477,6 +524,17 @@ async function compareWithReport(client, companyId, remoteLocations, pairs, out)
       out(`| ${d} | ${round1(hourly)} | ${round1(sal)} | ${round1(sched)} | ${vals.join(' | ')} |`);
     }
     out(`| **Total** | ${round1(totals.hourly)} | ${round1(totals.salaried)} | ${round1(totals.sched)} | ${[...hourKeys, ...salesKeys].map((k) => round1(theirs.get(k) ?? 0)).join(' | ')} |`);
+
+    // Labor $ for the 7 days as "ours ÷ 7shifts" only (no amounts): ours
+    // includes salaried pay spread the way 7shifts spreads it.
+    const ourActual = actual.filter((x) => x.business_date >= start && x.business_date <= end).reduce((s, x) => s + x.regular_cost + x.overtime_cost, 0);
+    const ourSched = scheduled.filter((x) => x.business_date >= start && x.business_date <= end).reduce((s, x) => s + x.cost, 0);
+    const costKeys = numKeys(/cost|wage/i).filter((k) => !/per_|percent/i.test(k));
+    const pct = (a, b) => (b ? `${((a / b) * 100).toFixed(1)}%` : '—');
+    for (const k of costKeys) {
+      const t = days.reduce((s, d) => s + (typeof d[k] === 'number' ? d[k] : 0), 0);
+      out(`- 7shifts \`${k}\`: ours actual is ${pct(ourActual, t)} of it, ours scheduled ${pct(ourSched, t)} (and ${pct(ourActual * 100, t)} / ${pct(ourSched * 100, t)} if 7shifts reports cents)`);
+    }
   }
 
   // How salaried wages are set up (no amounts).

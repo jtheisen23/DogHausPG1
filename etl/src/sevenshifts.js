@@ -386,6 +386,175 @@ export function punchLaborRows(items, { overtimeMultiplier = 1.5 } = {}) {
     .sort((a, b) => a.business_date.localeCompare(b.business_date) || a.job_title.localeCompare(b.job_title));
 }
 
+const WEEKDAYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+/**
+ * A wage's salary allocation days as weekday numbers (0 = Sunday). Accepts day
+ * names ("monday", "Mon") or { monday: true } objects. Empty (all 7 days) when
+ * unset; null when the format isn't recognized.
+ */
+export function allocationDays(value) {
+  if (value === undefined || value === null) return [];
+  const fromName = (s) => WEEKDAYS.indexOf(String(s).trim().slice(0, 3).toLowerCase());
+  let days;
+  if (Array.isArray(value)) {
+    if (!value.every((v) => typeof v === 'string')) return null;
+    days = value.map(fromName);
+  } else if (typeof value === 'object') {
+    days = Object.entries(value).filter(([, on]) => on === true || on === 1).map(([k]) => fromName(k));
+  } else {
+    return null;
+  }
+  return days.some((d) => d < 0) ? null : [...new Set(days)].sort();
+}
+
+/**
+ * A wage's salary split across 7shifts locations as [{ remoteId, share (0-1) }],
+ * from allocations like [{ location_id, percentage }]. Shares are normalized
+ * to add up to 1, whatever scale the percentages use. Null when there are no
+ * allocations or no location/percentage fields are found.
+ */
+export function allocationShares(allocations) {
+  if (!Array.isArray(allocations) || !allocations.length) return null;
+  const pctKey = (a) => ['percentage', 'percent', 'allocation', 'allocation_percentage', 'share', 'weight', 'value']
+    .find((k) => typeof a?.[k] === 'number' || (typeof a?.[k] === 'string' && a[k].trim() !== '' && Number.isFinite(Number(a[k]))));
+  const byLoc = new Map();
+  for (const a of allocations) {
+    const loc = a?.location_id ?? a?.location?.id;
+    const k = pctKey(a);
+    if (loc === undefined || loc === null || !k) return null;
+    byLoc.set(loc, (byLoc.get(loc) || 0) + Number(a[k]));
+  }
+  const total = [...byLoc.values()].reduce((s, v) => s + v, 0);
+  if (!(total > 0)) return null;
+  return [...byLoc].map(([remoteId, v]) => ({ remoteId, share: v / total }));
+}
+
+/** Weekly salary in cents for a salaried 7shifts wage, or null if the wage type isn't a known salary. */
+export function weeklySalaryCents(wage) {
+  const cents = num(wage?.wage_cents);
+  switch (String(wage?.wage_type || '').toLowerCase()) {
+    case 'weekly_salary':
+    case 'weekly':
+      return cents;
+    case 'annual_salary':
+    case 'annual':
+    case 'yearly_salary':
+      return cents / 52;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Salaried pay per location, day and role, spread the way 7shifts spreads it:
+ * the weekly salary is split across locations by allocation share, then
+ * evenly over the wage's allocation days, whether or not the person works
+ * them. `salaries` are { role, weeklyCents, days: [0-6] (0 = Sunday; empty =
+ * all 7), shares: [{ remoteId, share (0-1) }] }. Returns { remoteId, date, role,
+ * cost ($) } for every date from start to end.
+ */
+export function salaryRows(salaries, start, end) {
+  const out = [];
+  for (const date of eachDate(start, end)) {
+    const weekday = new Date(`${date}T12:00:00Z`).getUTCDay();
+    for (const s of salaries) {
+      const days = s.days?.length ? s.days : [0, 1, 2, 3, 4, 5, 6];
+      if (!days.includes(weekday) || !(s.weeklyCents > 0)) continue;
+      for (const { remoteId, share } of s.shares) {
+        if (share > 0) out.push({ remoteId, date, role: s.role, cost: (s.weeklyCents / 100) * share / days.length });
+      }
+    }
+  }
+  return out;
+}
+
+const LABOR_ROW = { role: 'job_title', cost: 'regular_cost', blank: { employees: 0, shifts: 0, regular_hours: 0, overtime_hours: 0, regular_cost: 0, overtime_cost: 0, salaried_hours: 0 } };
+export const SCHEDULED_ROW = { role: 'role', cost: 'cost', blank: { shifts: 0, employees: 0, hours: 0, cost: 0, open_shifts: 0, open_hours: 0 } };
+
+/**
+ * Adds salaried pay ({ date, role, cost }) to that day's row for the role
+ * (labor_daily rows by default, or SCHEDULED_ROW), adding a row without hours
+ * where there is none: a salaried manager who didn't work still costs their
+ * salary, as in 7shifts.
+ */
+export function addSalaries(rows, salaries, { role = LABOR_ROW.role, cost = LABOR_ROW.cost, blank = LABOR_ROW.blank } = {}) {
+  const byKey = new Map(rows.map((r) => [`${r.business_date}|${r[role]}`, r]));
+  for (const s of salaries) {
+    const key = `${s.date}|${s.role}`;
+    let r = byKey.get(key);
+    if (!r) {
+      r = { business_date: s.date, [role]: s.role, ...blank };
+      byKey.set(key, r);
+      rows.push(r);
+    }
+    r[cost] = round2(r[cost] + s.cost);
+  }
+  return rows.sort((a, b) => a.business_date.localeCompare(b.business_date) || String(a[role]).localeCompare(String(b[role])));
+}
+
+/**
+ * Salaried pay rows ({ remoteId, date, role, cost }) from start to end for the
+ * salaried people who worked or were scheduled each workweek. `presence` maps
+ * user id -> workweek start -> 7shifts location id -> hours there. Each
+ * person's salaried 7shifts wage gives the weekly amount, the allocation days
+ * and the location split; without allocations, the salary goes where they
+ * worked that week, in proportion to hours. Returns { rows, people, issues }
+ * (issues: unrecognized formats, without amounts).
+ */
+export async function salariedPay(presence, { wagesOf, roleName, start, end }) {
+  const rows = [];
+  const people = new Set();
+  const issues = new Set();
+  for (const [userId, weeks] of presence) {
+    const wages = (await wagesOf(userId)) || [];
+    const salaried = wages.filter((w) => w.wage_type && w.wage_type !== 'hourly');
+    if (!salaried.length) continue;
+    // One salary per person: the most recent.
+    const w = [...salaried].sort((a, b) => String(b.effective_date ?? '').localeCompare(String(a.effective_date ?? '')))[0];
+    const weeklyCents = weeklySalaryCents(w);
+    if (weeklyCents === null) {
+      issues.add(`wage type "${w.wage_type}" isn't a known salary`);
+      continue;
+    }
+    let days = allocationDays(w.enabled_days);
+    if (days === null) {
+      issues.add(`enabled_days format not recognized (${JSON.stringify(w.enabled_days).slice(0, 80)}); spread over 7 days`);
+      days = [];
+    }
+    const fixedShares = allocationShares(w.allocations);
+    for (const [week, locHours] of weeks) {
+      const from = week > start ? week : start;
+      const weekEnd = addDaysIso(week, 6);
+      const to = weekEnd < end ? weekEnd : end;
+      if (from > to) continue;
+      let shares = fixedShares;
+      if (!shares) {
+        const total = [...locHours.values()].reduce((s, h) => s + h, 0);
+        shares = [...locHours].map(([remoteId, h]) => ({ remoteId, share: total > 0 ? h / total : 1 / locHours.size }));
+      }
+      people.add(userId);
+      rows.push(...salaryRows([{ role: roleName(w.role_id), weeklyCents, days, shares }], from, to));
+    }
+  }
+  return { rows, people: people.size, issues: [...issues] };
+}
+
+/** Records that a user worked/was scheduled `hours` at a 7shifts location in a workweek. */
+export function notePresence(presence, userId, week, remoteId, hours) {
+  if (!presence.has(userId)) presence.set(userId, new Map());
+  const weeks = presence.get(userId);
+  if (!weeks.has(week)) weeks.set(week, new Map());
+  const locs = weeks.get(week);
+  locs.set(remoteId, (locs.get(remoteId) || 0) + Math.max(0, hours));
+}
+
+function addDaysIso(date, n) {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }

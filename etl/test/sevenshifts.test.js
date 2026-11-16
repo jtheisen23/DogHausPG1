@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  aggregateShifts, allocateOvertime, effectiveWageCents, hourlyWageCents, isSalaried, laborStatements, localDate, localMidnightUtc,
+  addSalaries, allocationDays, allocationShares, salaryRows, weeklySalaryCents, aggregateShifts, allocateOvertime, effectiveWageCents, hourlyWageCents, isSalaried, laborStatements, localDate, localMidnightUtc,
   matchLocations, punchHours, punchLaborRows, weekStartOf, weekStartSetting,
 } from '../src/sevenshifts.js';
 import { migratedDb } from '../../worker/test/d1.js';
@@ -145,6 +145,38 @@ test('7shifts labor replaces every day in the range; Toast labor is removed', ()
     { business_date: '2026-11-02', job_title: 'Salaried', regular_cost: 178.08 },
   ]);
   assert.deepEqual(laborStatements('HB', '2026-11-03', '2026-11-02', rows), []);
+});
+
+test('salaries are spread like 7shifts: split by location, then evenly over allocation days', () => {
+  assert.equal(weeklySalaryCents({ wage_type: 'annual_salary', wage_cents: 5200000 }), 100000);
+  assert.equal(weeklySalaryCents({ wage_type: 'weekly_salary', wage_cents: 120000 }), 120000);
+  assert.equal(weeklySalaryCents({ wage_type: 'hourly', wage_cents: 1800 }), null);
+  assert.deepEqual(allocationDays(['monday', 'Tuesday', 'fri']), [1, 2, 5]);
+  assert.deepEqual(allocationDays({ sunday: true, saturday: true, monday: false }), [0, 6]);
+  assert.deepEqual(allocationDays(null), []);
+  assert.equal(allocationDays([1, 2]), null); // numbers: unknown which day is 0
+  assert.equal(allocationDays(['someday']), null);
+  // Location split, whatever scale 7shifts uses (two departments at one location are combined).
+  assert.deepEqual(allocationShares([{ location_id: 1, department_id: 5, percentage: 50 }, { location_id: 1, department_id: 6, percentage: 25 }, { location_id: 2, percentage: 25 }]),
+    [{ remoteId: 1, share: 0.75 }, { remoteId: 2, share: 0.25 }]);
+  assert.deepEqual(allocationShares([{ location_id: 1, percent: '1' }]), [{ remoteId: 1, share: 1 }]);
+  assert.equal(allocationShares([]), null);
+  assert.equal(allocationShares([{ department_id: 5, percentage: 100 }]), null); // no location
+  // $1,000 a week, 75% Holbrook / 25% Central Kitchen, Monday-Friday only.
+  const rows = salaryRows([{ role: 'General Manager', weeklyCents: 100000, days: [1, 2, 3, 4, 5], shares: [{ remoteId: 'HB', share: 0.75 }, { remoteId: 'CK', share: 0.25 }] }], '2026-11-08', '2026-11-14');
+  const hb = rows.filter((r) => r.remoteId === 'HB');
+  assert.deepEqual(hb.map((r) => r.date), ['2026-11-09', '2026-11-10', '2026-11-11', '2026-11-12', '2026-11-13']); // no Sat/Sun
+  assert.equal(hb[0].cost, 150); // 1000 x 0.75 / 5
+  assert.equal(rows.reduce((s, r) => s + r.cost, 0), 1000);
+  // No allocation days set: all 7 days.
+  assert.equal(salaryRows([{ role: 'GM', weeklyCents: 70000, days: [], shares: [{ remoteId: 'HB', share: 1 }] }], '2026-11-09', '2026-11-15').length, 7);
+
+  // Merged into the role's row for the day; a row without hours when they didn't clock in.
+  const merged = addSalaries(
+    [{ business_date: '2026-11-09', job_title: 'General Manager', employees: 1, shifts: 1, regular_hours: 10, overtime_hours: 0, regular_cost: 0, overtime_cost: 0, salaried_hours: 10 }],
+    [{ date: '2026-11-09', role: 'General Manager', cost: 150 }, { date: '2026-11-10', role: 'General Manager', cost: 150 }],
+  );
+  assert.deepEqual(merged.map((r) => [r.business_date, r.regular_hours, r.regular_cost]), [['2026-11-09', 10, 150], ['2026-11-10', 0, 150]]);
 });
 
 test('a salary entered as an "hourly" 7shifts wage is treated as salaried', () => {
