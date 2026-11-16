@@ -158,7 +158,8 @@ backfill always skip labor. The *7shifts* tab (users with the **7shifts** box ti
 Admin, for their own locations; labor and sales figures follow the Labor and Sales permissions)
 compares scheduled labor from 7shifts with actual labor and shows the next 14 days of schedule.
 Salaried people (7shifts wage type not hourly, e.g. General Managers) count toward scheduled and
-actual hours, as in 7shifts, but their pay isn't hours × wage and they never get overtime. Their
+actual hours, as in 7shifts, but their pay isn't hours × wage; their hours past 40 a week count as
+overtime hours (as 7shifts counts them) without any overtime pay. Their
 pay is spread the way 7shifts spreads it in Daily Sales & Labor: the weekly salary (annual ÷ 52)
 is split across locations by the wage's allocations (or by where they worked that week), then
 evenly over its allocation days, whether or not they work them. It's counted for each workweek a
@@ -223,7 +224,7 @@ added to the Access policy (step 3) by hand.
 | Net sales | Gross sales − discounts. Tax, tips and service charges are tracked separately |
 | Voids | Value of voided items, checks and orders |
 | Avg check | Net sales ÷ orders |
-| Labor $ | From hourly 7shifts time punches: paid hours (clock-out − clock-in − unpaid breaks) × wage, with hours past 40 per employee per Monday–Sunday week (all locations) as overtime × wage × 1.5, plus salaried managers' pay from their 7shifts wages (weekly salary spread over their allocation days and locations, as 7shifts does). Salaried people's punches add hours but no hours × wage cost and no overtime. Toast time entries are not used |
+| Labor $ | From hourly 7shifts time punches: paid hours (clock-out − clock-in − unpaid breaks) × wage, with hours past 40 per employee per Monday–Sunday week (all locations) as overtime × wage × 1.5, plus salaried managers' pay from their 7shifts wages (weekly salary spread over their allocation days and locations, as 7shifts does). Salaried people's punches add hours (past 40 a week, overtime hours) but no hours × wage cost. Toast time entries are not used |
 | Labor % | Labor $ ÷ net sales |
 | SPLH | Net sales ÷ labor hours |
 | Hour of day | Hour the order was opened, in the location's time zone |

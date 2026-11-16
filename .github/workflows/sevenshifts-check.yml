@@ -23,4 +23,5 @@ jobs:
         env:
           SEVENSHIFTS_ACCESS_TOKEN: ${{ secrets.SEVENSHIFTS_ACCESS_TOKEN }}
           LOCATIONS_JSON: ${{ secrets.LOCATIONS_JSON }}
+          SEVENSHIFTS_WEEK_START: ${{ vars.SEVENSHIFTS_WEEK_START }}
         run: node etl/src/sevenshifts-sync.js --check

@@ -95,16 +95,17 @@ test('an unset or empty SEVENSHIFTS_WEEK_START means Monday, not Sunday', () => 
   assert.equal(weekStartSetting('Monday'), 1);
 });
 
-test('salaried punches add hours but no pay, and never overtime', () => {
+test('salaried punches add hours but no pay; past 40 h they count as overtime hours, as in 7shifts', () => {
   const day = (d, hours, extra = {}) => ({ user_id: 9, remoteId: 'A', date: `2026-11-0${d}`, clockedIn: Date.parse(`2026-11-0${d}T14:00:00Z`), hours, role: 'General Manager', wage: 0, salaried: true, ...extra });
-  // A general manager working 5 x 10 h: 50 h, none of it overtime.
+  // A general manager working 5 x 10 h: 50 h, the last 10 of them overtime hours (7shifts
+  // reported exactly salaried hours - 40 as extra overtime at three locations).
   const items = allocateOvertime([day(2, 10), day(3, 10), day(4, 10), day(5, 10), day(6, 10)]);
-  assert.ok(items.every((i) => i.overtime === 0 && i.regular === 10));
+  assert.deepEqual(items.map((i) => i.overtime), [0, 0, 0, 0, 10]);
   const rows = punchLaborRows([...items, { user_id: 7, remoteId: 'A', date: '2026-11-06', clockedIn: 0, hours: 8, regular: 8, overtime: 0, role: 'Associate (BOH)', wage: 18 }]);
   const fri = rows.filter((r) => r.business_date === '2026-11-06');
-  assert.deepEqual(fri.map((r) => [r.job_title, r.regular_hours, r.regular_cost, r.salaried_hours]), [
-    ['Associate (BOH)', 8, 144, 0],
-    ['General Manager', 10, 0, 10],
+  assert.deepEqual(fri.map((r) => [r.job_title, r.regular_hours, r.overtime_hours, r.regular_cost + r.overtime_cost, r.salaried_hours]), [
+    ['Associate (BOH)', 8, 0, 144, 0],
+    ['General Manager', 0, 10, 0, 10], // overtime hours, no pay
   ]);
 });
 

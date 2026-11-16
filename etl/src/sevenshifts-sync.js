@@ -205,7 +205,8 @@ async function syncLocation(client, companyId, remote, tz, start, end, wagesOf) 
  * Actual labor from time punches for every matched location. Punches are
  * read for all 7shifts locations (Central Kitchen too) from the start of the
  * first workweek, so overtime counts every hour an employee worked that week.
- * Salaried people's punches count as hours with no hourly pay or overtime.
+ * Salaried people's punches count as hours (and past 40 h as overtime hours,
+ * as in 7shifts) with no hourly pay.
  * Returns loc.id -> { start, end, rows, punches, salaried }.
  */
 async function punchLabor(client, companyId, remoteLocations, pairs, wagesOf, rangeOf = dateRange) {
@@ -535,20 +536,16 @@ async function compareWithReport(client, companyId, remoteLocations, pairs, out)
     const inRange = (x) => (x.business_date ?? x.date) >= start && (x.business_date ?? x.date) <= end;
     const ourActual = actual.filter(inRange).reduce((s, x) => s + x.regular_cost + x.overtime_cost, 0);
     const ourSched = scheduled.filter(inRange).reduce((s, x) => s + x.cost, 0);
-    const unallocated = (list) => list.filter((x) => inRange(x) && !x.allocated).reduce((s, x) => s + x.cost, 0);
     const theirCost = (k) => days.reduce((s, d) => s + (typeof d[k] === 'number' ? d[k] : 0), 0) / 100;
     const pct = (a, b) => (b ? `${((a / b) * 100).toFixed(1)}%` : '—');
     const ta = theirCost('actual_labor_cost');
     const tp = theirCost('projected_labor_cost');
-    out(`- Labor $, ours ÷ 7shifts: actual ${pct(ourActual, ta)}, scheduled ${pct(ourSched, tp)}`);
-    out(`  - without salaries that have no 7shifts allocation: actual ${pct(ourActual - unallocated(actualSalaries), ta)}, scheduled ${pct(ourSched - unallocated(schedSalaries), tp)}`);
-    const daily = [];
-    for (let d = start; d <= end; d = addDays(d, 1)) {
-      const o = sum(actual, d, (x) => x.regular_cost + x.overtime_cost);
-      const t = (byDate.get(d)?.actual_labor_cost ?? 0) / 100;
-      daily.push(pct(o, t));
-    }
-    out(`  - actual by day: ${daily.join(', ')}`);
+    // One weekly ratio per location, and only when our side includes at least
+    // one salary: hourly pay alone ÷ 7shifts' cost would give away 7shifts'
+    // cost (hourly pay is in the public sync logs), and with it the salaries.
+    // Same reason for no by-day ratios.
+    const paid = (list) => list.some(inRange);
+    out(`- Labor $, ours ÷ 7shifts: actual ${paid(actualSalaries) ? pct(ourActual, ta) : 'not shown (no salary counted here)'}, scheduled ${paid(schedSalaries) ? pct(ourSched, tp) : 'not shown (no salary counted here)'}`);
     const ourOt = actual.filter(inRange).reduce((s, x) => s + x.overtime_hours, 0);
     out(`- Overtime hours: ours ${round1(ourOt)}, 7shifts ${round1((theirs.get('actual_ot_minutes') ?? 0) / 60)}`);
     const who = (list) => {

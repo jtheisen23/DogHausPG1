@@ -329,18 +329,14 @@ export function weekStartOf(date, weekStart = 1) {
 /**
  * Splits each item's hours into regular and overtime: hours past
  * `weeklyLimit` in a workweek, per employee, across every location, in
- * clock-in order. Items are { user_id, clockedIn (ms), date, hours, salaried };
- * adds `regular` and `overtime` to each and returns them. Salaried items never
- * have overtime.
+ * clock-in order. Items are { user_id, clockedIn (ms), date, hours }; adds
+ * `regular` and `overtime` to each and returns them. Salaried people's hours
+ * count too, as in 7shifts' overtime minutes; their items have no pay (wage 0),
+ * so their overtime adds hours but no cost.
  */
 export function allocateOvertime(items, { weekStart = 1, weeklyLimit = 40 } = {}) {
   const worked = new Map();
   for (const it of [...items].sort((a, b) => a.clockedIn - b.clockedIn)) {
-    if (it.salaried) {
-      it.regular = it.hours;
-      it.overtime = 0;
-      continue;
-    }
     const key = `${it.user_id}|${weekStartOf(it.date, weekStart)}`;
     const before = worked.get(key) || 0;
     it.regular = Math.max(0, Math.min(it.hours, weeklyLimit - before));
