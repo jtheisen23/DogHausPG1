@@ -438,7 +438,8 @@ async function check(client, locations) {
         const sample = shifts.find((s) => Array.isArray(s.breaks) && s.breaks.length);
         if (sample) out(`Break fields: ${Object.keys(sample.breaks[0]).join(', ')}; types: ${[...new Set(shifts.flatMap((s) => (s.breaks || []).map((b) => b.type)))].join(', ')}`);
         const rows = aggregateShifts(shifts, { timeZone: tz, roles: new Map(roles.map((x) => [x.id, x.name])), excludedRoles: EXCLUDED_ROLES });
-        out(`Scheduled (published) hours: ${rows.reduce((s, x) => s + x.hours, 0).toFixed(1)}; cost from shift wages: $${rows.reduce((s, x) => s + x.cost, 0).toFixed(2)}`);
+        // Hours only: shift wages include salaried managers' salary-sized wages, and this log is public.
+        out(`Scheduled (published) hours: ${rows.reduce((s, x) => s + x.hours, 0).toFixed(1)}`);
         const userId = shifts.find((s) => s.user_id && !s.open)?.user_id;
         if (userId) {
           try {
@@ -463,9 +464,9 @@ async function check(client, locations) {
 /**
  * The dashboard's numbers for the last 7 full days next to 7shifts' own Daily
  * Sales & Labor report, per location and day: actual and scheduled hours, and
- * sales. Labor dollars are left out on purpose: most locations have one or two
- * salaried managers, so the salaried part of a location's labor cost is their
- * pay, and this log is public. Ends with the shape (no amounts) of salaried
+ * sales. Labor dollars appear only as "ours ÷ 7shifts" percentages: most
+ * locations have one or two salaried managers, so the salaried part of a
+ * location's labor cost is their pay, and this log is public. Ends with the shape (no amounts) of salaried
  * people's wage allocation fields, which decide how 7shifts spreads a salary
  * over days and locations.
  */
