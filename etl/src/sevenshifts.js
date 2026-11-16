@@ -133,6 +133,18 @@ export class SevenShiftsClient {
     }
   }
 
+  /** Daily Sales & Labor days from start to end, requested a month at a time. */
+  async dailyReportDays(companyId, locationId, start, end) {
+    const days = [];
+    for (let from = start; from <= end; from = addDaysIso(from, 31)) {
+      const to = addDaysIso(from, 30) < end ? addDaysIso(from, 30) : end;
+      const body = await this.dailySalesAndLabor(companyId, locationId, from, to);
+      const data = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
+      days.push(...data);
+    }
+    return days;
+  }
+
   /** Current wages of one user; used when a shift has no wage on it. */
   async userWages(companyId, userId) {
     const body = await this.get(`/v2/company/${companyId}/users/${userId}/wages`);
@@ -553,6 +565,77 @@ function addDaysIso(date, n) {
   const d = new Date(`${date}T12:00:00Z`);
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
+}
+
+// ---------------------------------------------------------------------------
+// Matching 7shifts' Daily Sales & Labor exactly
+// ---------------------------------------------------------------------------
+
+/** Name of the per-day row that makes a location's totals equal 7shifts'. */
+export const ADJUSTMENT_ROLE = '7shifts adjustment';
+
+/** 7shifts' Daily Sales & Labor days as date (YYYY-MM-DD) -> day record. */
+export function reportByDate(days) {
+  const out = new Map();
+  for (const d of days || []) {
+    const date = String(d?.date ?? '').slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) out.set(date, d);
+  }
+  return out;
+}
+
+const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+const total = (rows, f) => rows.reduce((s, r) => s + f(r), 0);
+
+/**
+ * Makes each day's actual labor (labor_daily rows) add up to 7shifts' Daily
+ * Sales & Labor for that day: hours (actual_labor_minutes), overtime hours
+ * (actual_ot_minutes) and cost (actual_labor_cost, in cents). The rows keep
+ * the breakdown by role; one ADJUSTMENT_ROLE row per day carries whatever
+ * differs (mostly salaried pay that 7shifts books differently). Days missing
+ * from the report are left as they are. Returns { rows, days } (days = the
+ * number of days the report covered).
+ */
+export function reconcileActual(rows, report, start, end) {
+  const out = rows.filter((r) => r.job_title !== ADJUSTMENT_ROLE);
+  let days = 0;
+  for (const date of eachDate(start, end)) {
+    const t = report.get(date);
+    if (!t || !isNum(t.actual_labor_cost) || !isNum(t.actual_labor_minutes)) continue;
+    days++;
+    const mine = out.filter((r) => r.business_date === date);
+    const ot = isNum(t.actual_ot_minutes) ? t.actual_ot_minutes / 60 - total(mine, (r) => r.overtime_hours) : 0;
+    const hours = t.actual_labor_minutes / 60 - total(mine, (r) => r.regular_hours + r.overtime_hours);
+    const cost = t.actual_labor_cost / 100 - total(mine, (r) => r.regular_cost + r.overtime_cost);
+    if (Math.abs(hours) < 0.005 && Math.abs(ot) < 0.005 && Math.abs(cost) < 0.005) continue;
+    out.push({
+      business_date: date, job_title: ADJUSTMENT_ROLE, employees: 0, shifts: 0,
+      regular_hours: round2(hours - ot), overtime_hours: round2(ot), regular_cost: round2(cost), overtime_cost: 0, salaried_hours: 0,
+    });
+  }
+  out.sort((a, b) => a.business_date.localeCompare(b.business_date) || a.job_title.localeCompare(b.job_title));
+  return { rows: out, days };
+}
+
+/**
+ * The same for scheduled labor (scheduled_labor rows): hours and cost per day
+ * equal 7shifts' projected_labor_minutes and projected_labor_cost.
+ */
+export function reconcileScheduled(rows, report, start, end) {
+  const out = rows.filter((r) => r.role !== ADJUSTMENT_ROLE);
+  let days = 0;
+  for (const date of eachDate(start, end)) {
+    const t = report.get(date);
+    if (!t || !isNum(t.projected_labor_cost) || !isNum(t.projected_labor_minutes)) continue;
+    days++;
+    const mine = out.filter((r) => r.business_date === date);
+    const hours = t.projected_labor_minutes / 60 - total(mine, (r) => r.hours);
+    const cost = t.projected_labor_cost / 100 - total(mine, (r) => r.cost);
+    if (Math.abs(hours) < 0.005 && Math.abs(cost) < 0.005) continue;
+    out.push({ business_date: date, role: ADJUSTMENT_ROLE, shifts: 0, employees: 0, hours: round2(hours), cost: round2(cost), open_shifts: 0, open_hours: 0 });
+  }
+  out.sort((a, b) => a.business_date.localeCompare(b.business_date) || String(a.role).localeCompare(String(b.role)));
+  return { rows: out, days };
 }
 
 function sleep(ms) {

@@ -26,7 +26,8 @@ import { addDays, parseDate, todayIn } from './dates.js';
 import { loadLocations } from './config.js';
 import {
   addSalaries, aggregateShifts, allocateOvertime, effectiveWageCents, hourlyWageCents, isSalaried, laborStatements, localDate, localMidnightUtc,
-  matchLocations, notePresence, punchHours, punchLaborRows, salariedPay, SCHEDULED_ROW, SevenShiftsClient, weekStartOf, weekStartSetting,
+  matchLocations, notePresence, punchHours, punchLaborRows, reconcileActual, reconcileScheduled, reportByDate, salariedPay, SCHEDULED_ROW,
+  SevenShiftsClient, weekStartOf, weekStartSetting,
 } from './sevenshifts.js';
 import { lit } from './sql.js';
 import { D1Sink, FileSink } from './sink.js';
@@ -91,28 +92,39 @@ async function main() {
     }
     const tz = loc.timezone || remote.timezone || 'America/New_York';
     const { start, end } = dateRange(tz);
+    // 7shifts' own Daily Sales & Labor totals, which the dashboard's daily
+    // totals are matched to. Without it (e.g. a plan without reports), the
+    // dashboard's own calculation stands.
+    let report = null;
+    try {
+      report = reportByDate(await client.dailyReportDays(company.id, remote.id, start, end));
+    } catch (err) {
+      log(`${loc.id}: 7shifts Daily Sales & Labor unavailable (${err.status ?? ''} ${err.message.slice(0, 120)}); totals are the dashboard's own calculation`);
+    }
     if (labor?.has(loc.id)) {
       const l = labor.get(loc.id);
       try {
-        // Salaried pay comes from 7shifts wages, as in 7shifts; the configured
-        // salariedLaborPerDay is only a fallback when 7shifts has no salaries.
-        const configured = l.salaryFrom7shifts ? 0 : loc.salariedLaborPerDay;
-        if (l.salaryFrom7shifts && Number(loc.salariedLaborPerDay) > 0) log(`${loc.id}: salariedLaborPerDay ignored; salaried pay comes from 7shifts wages`);
-        await sink.write(laborStatements(loc.id, l.start, l.end, l.rows, configured));
+        const matched = report ? reconcileActual(l.rows, report, l.start, l.end) : { rows: l.rows, days: 0 };
+        // Salaried pay comes from 7shifts (its report, else its wages); the
+        // configured salariedLaborPerDay is only a fallback without either.
+        const configured = matched.days || l.salaryFrom7shifts ? 0 : loc.salariedLaborPerDay;
+        if (!configured && Number(loc.salariedLaborPerDay) > 0) log(`${loc.id}: salariedLaborPerDay ignored; salaried pay comes from 7shifts`);
+        await sink.write(laborStatements(loc.id, l.start, l.end, matched.rows, configured));
         const hours = l.rows.reduce((s, r) => s + r.regular_hours + r.overtime_hours, 0);
         const salariedHours = l.rows.reduce((s, r) => s + r.salaried_hours, 0);
         // Only hourly pay is logged: the log is public, and salaried pay is a few people's salaries.
-        log(`${loc.id} actual labor: ${l.start} .. ${l.end}, ${l.days.length} day(s) with punches, ${l.punches} punches, ${hours.toFixed(1)} h, $${l.hourlyCost.toFixed(2)} hourly pay${l.salaried ? `; ${l.salaried} salaried punches (${salariedHours.toFixed(1)} h)` : ''}${l.salaryFrom7shifts ? '; salaried pay added from 7shifts wages (not shown)' : ''}`);
+        log(`${loc.id} actual labor: ${l.start} .. ${l.end}, ${l.days.length} day(s) with punches, ${l.punches} punches, ${hours.toFixed(1)} h, $${l.hourlyCost.toFixed(2)} hourly pay${l.salaried ? `; ${l.salaried} salaried punches (${salariedHours.toFixed(1)} h)` : ''}; salaried pay not shown; ${matched.days} day(s) matched to 7shifts' Daily Sales & Labor`);
       } catch (err) {
         failures++;
         log(`${loc.id} actual labor: FAILED - ${err.message}`);
       }
     }
     try {
-      const { rows, hourlyCost, salariedPeople } = await syncLocation(client, company.id, remote, tz, start, end, wagesOf);
-      await sink.write(statements(loc.id, start, end, rows));
-      const hours = rows.reduce((s, r) => s + r.hours, 0);
-      log(`${loc.id} <- 7shifts "${remote.name}": ${start} .. ${end}, ${rows.length} rows, ${hours.toFixed(1)} h, $${hourlyCost.toFixed(2)} scheduled hourly pay${salariedPeople ? ' + salaried pay (not shown)' : ''}`);
+      const sched = await syncLocation(client, company.id, remote, tz, start, end, wagesOf);
+      const matched = report ? reconcileScheduled(sched.rows, report, start, end) : { rows: sched.rows, days: 0 };
+      await sink.write(statements(loc.id, start, end, matched.rows));
+      const hours = sched.rows.reduce((s, r) => s + r.hours, 0);
+      log(`${loc.id} <- 7shifts "${remote.name}": ${start} .. ${end}, ${sched.rows.length} rows, ${hours.toFixed(1)} h, $${sched.hourlyCost.toFixed(2)} scheduled hourly pay${sched.salariedPeople ? ' + salaried pay (not shown)' : ''}; ${matched.days} day(s) matched to 7shifts' Daily Sales & Labor`);
     } catch (err) {
       failures++;
       log(`${loc.id}: FAILED - ${err.message}`);
@@ -545,7 +557,7 @@ async function compareWithReport(client, companyId, remoteLocations, pairs, out)
     // cost (hourly pay is in the public sync logs), and with it the salaries.
     // Same reason for no by-day ratios.
     const paid = (list) => list.some(inRange);
-    out(`- Labor $, ours ÷ 7shifts: actual ${paid(actualSalaries) ? pct(ourActual, ta) : 'not shown (no salary counted here)'}, scheduled ${paid(schedSalaries) ? pct(ourSched, tp) : 'not shown (no salary counted here)'}`);
+    out(`- Labor $ by role before the sync matches 7shifts' daily totals, ours ÷ 7shifts: actual ${paid(actualSalaries) ? pct(ourActual, ta) : 'not shown (no salary counted here)'}, scheduled ${paid(schedSalaries) ? pct(ourSched, tp) : 'not shown (no salary counted here)'}`);
     const ourOt = actual.filter(inRange).reduce((s, x) => s + x.overtime_hours, 0);
     out(`- Overtime hours: ours ${round1(ourOt)}, 7shifts ${round1((theirs.get('actual_ot_minutes') ?? 0) / 60)}`);
     const who = (list) => {

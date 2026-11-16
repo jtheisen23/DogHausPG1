@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  addSalaries, allocationDays, allocationShares, salaryRows, weeklySalaryCents, aggregateShifts, allocateOvertime, effectiveWageCents, hourlyWageCents, isSalaried, laborStatements, localDate, localMidnightUtc,
+  ADJUSTMENT_ROLE, reconcileActual, reconcileScheduled, reportByDate, addSalaries, allocationDays, allocationShares, salaryRows, weeklySalaryCents, aggregateShifts, allocateOvertime, effectiveWageCents, hourlyWageCents, isSalaried, laborStatements, localDate, localMidnightUtc,
   matchLocations, punchHours, punchLaborRows, weekStartOf, weekStartSetting,
 } from '../src/sevenshifts.js';
 import { migratedDb } from '../../worker/test/d1.js';
@@ -181,6 +181,35 @@ test('salaries are spread like 7shifts: split by location, then evenly over allo
     [{ date: '2026-11-09', role: 'General Manager', cost: 150 }, { date: '2026-11-10', role: 'General Manager', cost: 150 }],
   );
   assert.deepEqual(merged.map((r) => [r.business_date, r.regular_hours, r.regular_cost]), [['2026-11-09', 10, 150], ['2026-11-10', 0, 150]]);
+});
+
+test('daily totals are matched to 7shifts Daily Sales & Labor with one adjustment row a day', () => {
+  const report = reportByDate([
+    // 7shifts reports minutes and cents.
+    { date: '2026-11-09', actual_labor_minutes: 1260, actual_ot_minutes: 60, actual_labor_cost: 52000, projected_labor_minutes: 1200, projected_labor_cost: 50000 },
+    { date: '2026-11-10', actual_labor_minutes: 600, actual_ot_minutes: 0, actual_labor_cost: 18000, projected_labor_minutes: 600, projected_labor_cost: 18000 },
+  ]);
+  const actual = [
+    { business_date: '2026-11-09', job_title: 'Associate (BOH)', employees: 2, shifts: 2, regular_hours: 16, overtime_hours: 0, regular_cost: 288, overtime_cost: 0, salaried_hours: 0 },
+    { business_date: '2026-11-09', job_title: 'General Manager', employees: 1, shifts: 1, regular_hours: 5, overtime_hours: 0, regular_cost: 150, overtime_cost: 0, salaried_hours: 5 },
+    { business_date: '2026-11-10', job_title: 'Associate (BOH)', employees: 1, shifts: 1, regular_hours: 10, overtime_hours: 0, regular_cost: 180, overtime_cost: 0, salaried_hours: 0 },
+    { business_date: '2026-11-11', job_title: 'Associate (BOH)', employees: 1, shifts: 1, regular_hours: 8, overtime_hours: 0, regular_cost: 144, overtime_cost: 0, salaried_hours: 0 },
+  ];
+  const { rows, days } = reconcileActual(actual, report, '2026-11-09', '2026-11-11');
+  assert.equal(days, 2); // the 11th isn't in the report: left as is
+  const adj = rows.filter((r) => r.job_title === ADJUSTMENT_ROLE);
+  assert.equal(adj.length, 1); // the 10th already matches: no row
+  assert.deepEqual([adj[0].business_date, adj[0].regular_hours, adj[0].overtime_hours, adj[0].regular_cost], ['2026-11-09', -1, 1, 82]);
+  const day = rows.filter((r) => r.business_date === '2026-11-09');
+  assert.equal(day.reduce((s, r) => s + r.regular_hours + r.overtime_hours, 0), 21); // 1260 min
+  assert.equal(day.reduce((s, r) => s + r.overtime_hours, 0), 1);
+  assert.equal(day.reduce((s, r) => s + r.regular_cost + r.overtime_cost, 0), 520);
+  // Running it again replaces the adjustment rather than adding another.
+  assert.deepEqual(reconcileActual(rows, report, '2026-11-09', '2026-11-11').rows, rows);
+
+  const sched = reconcileScheduled([{ business_date: '2026-11-09', role: 'Associate (BOH)', shifts: 2, employees: 2, hours: 18, cost: 324, open_shifts: 0, open_hours: 0 }], report, '2026-11-09', '2026-11-10');
+  assert.equal(sched.days, 2);
+  assert.deepEqual(sched.rows.filter((r) => r.role === ADJUSTMENT_ROLE).map((r) => [r.business_date, r.hours, r.cost]), [['2026-11-09', 2, 176], ['2026-11-10', 10, 180]]);
 });
 
 test('a salary entered as an "hourly" 7shifts wage is treated as salaried', () => {

@@ -165,7 +165,16 @@ is split across locations by the wage's allocations (or by where they worked tha
 evenly over its allocation days, whether or not they work them. It's counted for each workweek a
 salaried person worked or was scheduled, and shows under their role (e.g. General Manager). It
 replaces `salariedLaborPerDay`, which is used only when 7shifts has no salaries. The sync log
-shows hourly pay only, because the log is public. Overtime weeks start on Monday unless the repository variable
+shows hourly pay only, because the log is public.
+
+**Totals match 7shifts exactly.** Each sync also reads 7shifts' own Daily Sales & Labor report
+(The Works plan or higher) and matches every location's daily totals to it: actual hours,
+overtime hours and labor $, and scheduled hours and labor $. The breakdown by role still comes
+from punches, shifts and wages; a *7shifts adjustment* row per day carries the difference. It's
+mostly salaried pay that 7shifts books somewhere other than where the manager worked (for example
+salaried wages without a location allocation in 7shifts). Giving every salaried wage a location
+allocation in 7shifts keeps the adjustment small. Days the report doesn't cover keep the
+dashboard's own calculation. Overtime weeks start on Monday unless the repository variable
 `SEVENSHIFTS_WEEK_START` says otherwise (0 = Sunday). To load 7shifts history (schedule,
 labor and log book), run *Toast sync* with *sevenshifts_only* and *logbook_all* ticked and a start
 date such as 2025-01-01. Add a GitHub secret
@@ -224,7 +233,7 @@ added to the Access policy (step 3) by hand.
 | Net sales | Gross sales − discounts. Tax, tips and service charges are tracked separately |
 | Voids | Value of voided items, checks and orders |
 | Avg check | Net sales ÷ orders |
-| Labor $ | From hourly 7shifts time punches: paid hours (clock-out − clock-in − unpaid breaks) × wage, with hours past 40 per employee per Monday–Sunday week (all locations) as overtime × wage × 1.5, plus salaried managers' pay from their 7shifts wages (weekly salary spread over their allocation days and locations, as 7shifts does). Salaried people's punches add hours (past 40 a week, overtime hours) but no hours × wage cost. Toast time entries are not used |
+| Labor $ | From hourly 7shifts time punches: paid hours (clock-out − clock-in − unpaid breaks) × wage, with hours past 40 per employee per Monday–Sunday week (all locations) as overtime × wage × 1.5, plus salaried managers' pay from their 7shifts wages (weekly salary spread over their allocation days and locations, as 7shifts does). Salaried people's punches add hours (past 40 a week, overtime hours) but no hours × wage cost. Each day's total is then matched to 7shifts' Daily Sales & Labor (the *7shifts adjustment* row). Toast time entries are not used |
 | Labor % | Labor $ ÷ net sales |
 | SPLH | Net sales ÷ labor hours |
 | Hour of day | Hour the order was opened, in the location's time zone |
