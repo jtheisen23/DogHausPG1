@@ -133,11 +133,14 @@ export class SevenShiftsClient {
     }
   }
 
-  /** Daily Sales & Labor days from start to end, requested a month at a time. */
+  /**
+   * Daily Sales & Labor days from start to end, requested a week at a time
+   * (the range the connection check has confirmed works).
+   */
   async dailyReportDays(companyId, locationId, start, end) {
     const days = [];
-    for (let from = start; from <= end; from = addDaysIso(from, 31)) {
-      const to = addDaysIso(from, 30) < end ? addDaysIso(from, 30) : end;
+    for (let from = start; from <= end; from = addDaysIso(from, 7)) {
+      const to = addDaysIso(from, 6) < end ? addDaysIso(from, 6) : end;
       const body = await this.dailySalesAndLabor(companyId, locationId, from, to);
       const data = Array.isArray(body?.data) ? body.data : Array.isArray(body) ? body : [];
       days.push(...data);
