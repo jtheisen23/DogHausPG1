@@ -27,7 +27,17 @@ export class SevenShiftsClient {
       const wait = this.lastRequestAt + this.minIntervalMs - Date.now();
       if (wait > 0) await sleep(wait);
       this.lastRequestAt = Date.now();
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/json' } });
+      let res;
+      try {
+        res = await fetch(url, { headers: { Authorization: `Bearer ${this.token}`, Accept: 'application/json' } });
+      } catch (err) {
+        // A dropped connection ("fetch failed"): retry like a server error.
+        if (attempt >= 5) throw err;
+        const delay = 1000 * 2 ** attempt;
+        this.log(`7shifts ${err.cause?.code || err.message} on ${url.pathname}; retrying in ${delay}ms`);
+        await sleep(delay);
+        continue;
+      }
       if (res.ok) return res.json();
       if ((res.status === 429 || res.status >= 500) && attempt < 5) {
         const retryAfter = Number(res.headers.get('Retry-After'));

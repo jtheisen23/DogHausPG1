@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ADJUSTMENT_ROLE, reconcileActual, reconcileScheduled, reportByDate, addSalaries, allocationDays, allocationShares, salaryRows, weeklySalaryCents, aggregateShifts, allocateOvertime, effectiveWageCents, hourlyWageCents, isSalaried, laborStatements, localDate, localMidnightUtc,
-  matchLocations, punchHours, punchLaborRows, weekStartOf, weekStartSetting,
+  matchLocations, punchHours, punchLaborRows, SevenShiftsClient, weekStartOf, weekStartSetting,
 } from '../src/sevenshifts.js';
 import { migratedDb } from '../../worker/test/d1.js';
 
@@ -226,4 +226,27 @@ test('a salary entered as an "hourly" 7shifts wage is treated as salaried', () =
   assert.equal(isSalaried(wages, 5, cents), true); // ...the wage it would be costed at does not
   assert.equal(effectiveWageCents(wages, 5, 1800), 1800); // a wage on the punch wins
   assert.equal(isSalaried([{ role_id: 5, wage_type: 'hourly', wage_cents: 1750 }], 5, effectiveWageCents([{ role_id: 5, wage_type: 'hourly', wage_cents: 1750 }], 5, 0)), false);
+});
+
+test('the 7shifts client retries a dropped connection', async () => {
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    if (calls === 1) throw new TypeError('fetch failed');
+    return new Response(JSON.stringify({ data: [1] }), { status: 200 });
+  };
+  try {
+    const client = new SevenShiftsClient({ token: 't', minIntervalMs: 0, log: () => {} });
+    const origSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = (fn) => origSetTimeout(fn, 0); // skip the backoff wait
+    try {
+      assert.deepEqual(await client.get('/v2/x'), { data: [1] });
+    } finally {
+      globalThis.setTimeout = origSetTimeout;
+    }
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
 });
