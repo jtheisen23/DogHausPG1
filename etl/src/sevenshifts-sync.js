@@ -196,8 +196,9 @@ async function syncLocation(client, companyId, remote, tz, start, end, wagesOf) 
   }
   const pay = await salariedPay(presence, { wagesOf, roleName: (id) => roles.get(id) || 'Salaried', start, end });
   for (const issue of pay.issues) log(`  salaried pay: ${issue}`);
-  addSalaries(rows, pay.rows.filter((x) => x.remoteId === remote.id), SCHEDULED_ROW);
-  return { rows, hourlyCost, salariedPeople: pay.people };
+  const salaries = pay.rows.filter((x) => x.remoteId === remote.id);
+  addSalaries(rows, salaries, SCHEDULED_ROW);
+  return { rows, hourlyCost, salariedPeople: pay.people, salaries };
 }
 
 /**
@@ -283,6 +284,7 @@ async function punchLabor(client, companyId, remoteLocations, pairs, wagesOf, ra
       ...range,
       days: daysByRemote.get(remote.id) || [],
       rows: addSalaries(rows, salaries),
+      salaries,
       hourlyCost,
       salaryFrom7shifts: pay.people > 0,
       punches: mine.length,
@@ -502,8 +504,9 @@ async function compareWithReport(client, companyId, remoteLocations, pairs, out)
       out(`Day fields: ${days[0] ? Object.keys(days[0]).join(', ') : '(no days)'}; date field: ${dateKey ?? 'not found'}`);
       fieldsShown = true;
     }
-    const { rows: scheduled } = await syncLocation(client, companyId, r, tz, start, end, wagesOf);
+    const { rows: scheduled, salaries: schedSalaries } = await syncLocation(client, companyId, r, tz, start, end, wagesOf);
     const actual = labor.get(loc.id)?.rows || [];
+    const actualSalaries = labor.get(loc.id)?.salaries || [];
     const byDate = new Map(days.map((d) => [String(d[dateKey] ?? '').slice(0, 10), d]));
     const sum = (rows, date, f) => rows.filter((x) => x.business_date === date).reduce((s, x) => s + f(x), 0);
     out(`| Date | Ours hourly h | Ours salaried h | Ours sched h | ${[...hourKeys, ...salesKeys].map((k) => `7shifts ${k}`).join(' | ')} |`);
@@ -528,14 +531,32 @@ async function compareWithReport(client, companyId, remoteLocations, pairs, out)
 
     // Labor $ for the 7 days as "ours ÷ 7shifts" only (no amounts): ours
     // includes salaried pay spread the way 7shifts spreads it.
-    const ourActual = actual.filter((x) => x.business_date >= start && x.business_date <= end).reduce((s, x) => s + x.regular_cost + x.overtime_cost, 0);
-    const ourSched = scheduled.filter((x) => x.business_date >= start && x.business_date <= end).reduce((s, x) => s + x.cost, 0);
-    const costKeys = numKeys(/cost|wage/i).filter((k) => !/per_|percent/i.test(k));
+    // 7shifts reports labor cost in cents (actual_labor_cost, projected_labor_cost).
+    const inRange = (x) => (x.business_date ?? x.date) >= start && (x.business_date ?? x.date) <= end;
+    const ourActual = actual.filter(inRange).reduce((s, x) => s + x.regular_cost + x.overtime_cost, 0);
+    const ourSched = scheduled.filter(inRange).reduce((s, x) => s + x.cost, 0);
+    const unallocated = (list) => list.filter((x) => inRange(x) && !x.allocated).reduce((s, x) => s + x.cost, 0);
+    const theirCost = (k) => days.reduce((s, d) => s + (typeof d[k] === 'number' ? d[k] : 0), 0) / 100;
     const pct = (a, b) => (b ? `${((a / b) * 100).toFixed(1)}%` : '—');
-    for (const k of costKeys) {
-      const t = days.reduce((s, d) => s + (typeof d[k] === 'number' ? d[k] : 0), 0);
-      out(`- 7shifts \`${k}\`: ours actual is ${pct(ourActual, t)} of it, ours scheduled ${pct(ourSched, t)} (and ${pct(ourActual * 100, t)} / ${pct(ourSched * 100, t)} if 7shifts reports cents)`);
+    const ta = theirCost('actual_labor_cost');
+    const tp = theirCost('projected_labor_cost');
+    out(`- Labor $, ours ÷ 7shifts: actual ${pct(ourActual, ta)}, scheduled ${pct(ourSched, tp)}`);
+    out(`  - without salaries that have no 7shifts allocation: actual ${pct(ourActual - unallocated(actualSalaries), ta)}, scheduled ${pct(ourSched - unallocated(schedSalaries), tp)}`);
+    const daily = [];
+    for (let d = start; d <= end; d = addDays(d, 1)) {
+      const o = sum(actual, d, (x) => x.regular_cost + x.overtime_cost);
+      const t = (byDate.get(d)?.actual_labor_cost ?? 0) / 100;
+      daily.push(pct(o, t));
     }
+    out(`  - actual by day: ${daily.join(', ')}`);
+    const ourOt = actual.filter(inRange).reduce((s, x) => s + x.overtime_hours, 0);
+    out(`- Overtime hours: ours ${round1(ourOt)}, 7shifts ${round1((theirs.get('actual_ot_minutes') ?? 0) / 60)}`);
+    const who = (list) => {
+      const a = new Set(list.filter((x) => inRange(x) && x.allocated).map((x) => x.userId)).size;
+      const p = new Set(list.filter((x) => inRange(x) && !x.allocated).map((x) => x.userId)).size;
+      return `${a} by 7shifts allocation, ${p} without one (by where they worked)`;
+    };
+    out(`- Salaried people paid here: actual ${who(actualSalaries)}; scheduled ${who(schedSalaries)}`);
   }
 
   // How salaried wages are set up (no amounts).

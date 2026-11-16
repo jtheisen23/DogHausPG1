@@ -160,6 +160,9 @@ test('salaries are spread like 7shifts: split by location, then evenly over allo
   assert.deepEqual(allocationShares([{ location_id: 1, department_id: 5, percentage: 50 }, { location_id: 1, department_id: 6, percentage: 25 }, { location_id: 2, percentage: 25 }]),
     [{ remoteId: 1, share: 0.75 }, { remoteId: 2, share: 0.25 }]);
   assert.deepEqual(allocationShares([{ location_id: 1, percent: '1' }]), [{ remoteId: 1, share: 1 }]);
+  // The shape 7shifts actually sends (seen in the connection check).
+  assert.deepEqual(allocationShares([{ location_id: 487399, amount_tenths: 1000 }]), [{ remoteId: 487399, share: 1 }]);
+  assert.deepEqual(allocationDays({ Sunday: false, Monday: true, Tuesday: true, Wednesday: true, Thursday: true, Friday: true, Saturday: false }), [1, 2, 3, 4, 5]);
   assert.equal(allocationShares([]), null);
   assert.equal(allocationShares([{ department_id: 5, percentage: 100 }]), null); // no location
   // $1,000 a week, 75% Holbrook / 25% Central Kitchen, Monday-Friday only.

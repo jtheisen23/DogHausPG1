@@ -416,7 +416,8 @@ export function allocationDays(value) {
  */
 export function allocationShares(allocations) {
   if (!Array.isArray(allocations) || !allocations.length) return null;
-  const pctKey = (a) => ['percentage', 'percent', 'allocation', 'allocation_percentage', 'share', 'weight', 'value']
+  // 7shifts sends { location_id, amount_tenths }; the others are fallbacks.
+  const pctKey = (a) => ['amount_tenths', 'percentage', 'percent', 'allocation', 'allocation_percentage', 'share', 'weight', 'value']
     .find((k) => typeof a?.[k] === 'number' || (typeof a?.[k] === 'string' && a[k].trim() !== '' && Number.isFinite(Number(a[k]))));
   const byLoc = new Map();
   for (const a of allocations) {
@@ -505,6 +506,7 @@ export function addSalaries(rows, salaries, { role = LABOR_ROW.role, cost = LABO
 export async function salariedPay(presence, { wagesOf, roleName, start, end }) {
   const rows = [];
   const people = new Set();
+  const allocatedPeople = new Set();
   const issues = new Set();
   for (const [userId, weeks] of presence) {
     const wages = (await wagesOf(userId)) || [];
@@ -534,10 +536,12 @@ export async function salariedPay(presence, { wagesOf, roleName, start, end }) {
         shares = [...locHours].map(([remoteId, h]) => ({ remoteId, share: total > 0 ? h / total : 1 / locHours.size }));
       }
       people.add(userId);
-      rows.push(...salaryRows([{ role: roleName(w.role_id), weeklyCents, days, shares }], from, to));
+      if (fixedShares) allocatedPeople.add(userId);
+      const allocated = !!fixedShares;
+      rows.push(...salaryRows([{ role: roleName(w.role_id), weeklyCents, days, shares }], from, to).map((r) => ({ ...r, allocated, userId })));
     }
   }
-  return { rows, people: people.size, issues: [...issues] };
+  return { rows, people: people.size, allocatedPeople: allocatedPeople.size, issues: [...issues] };
 }
 
 /** Records that a user worked/was scheduled `hours` at a 7shifts location in a workweek. */
