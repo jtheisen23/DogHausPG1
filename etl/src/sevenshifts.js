@@ -118,6 +118,21 @@ export class SevenShiftsClient {
     return new Map(users.map((u) => [u.id, displayName(u)]));
   }
 
+  /**
+   * 7shifts' own Daily Sales & Labor report for one location (The Works plan
+   * or higher), as returned. Used by the connection check to compare the
+   * dashboard's labor with what 7shifts shows.
+   */
+  async dailySalesAndLabor(companyId, locationId, startDate, endDate) {
+    const query = { location_id: locationId, start_date: startDate, end_date: endDate };
+    try {
+      return await this.get('/v2/reports/daily_sales_and_labor', query);
+    } catch (err) {
+      if (err.status !== 404) throw err;
+      return this.get(`/v2/company/${companyId}/reports/daily_sales_and_labor`, query);
+    }
+  }
+
   /** Current wages of one user; used when a shift has no wage on it. */
   async userWages(companyId, userId) {
     const body = await this.get(`/v2/company/${companyId}/users/${userId}/wages`);
@@ -199,13 +214,15 @@ export function shiftWage(s, userWage) {
  * Turns shifts into rows of { business_date, role, shifts, employees, hours,
  * cost, open_shifts, open_hours } for one location. Shifts are dated by their
  * local start time. `excludedRoles` are lower-cased names to leave out.
+ * Salaried people's shifts (`salaried(s)`) count toward hours, as in 7shifts,
+ * but not toward hours x wage cost: their pay is added from their salary.
  */
-export function aggregateShifts(shifts, { timeZone, roles, wageFor = () => 0, excludedRoles = [], exclude = () => false }) {
+export function aggregateShifts(shifts, { timeZone, roles, wageFor = () => 0, excludedRoles = [], salaried = () => false }) {
   const skip = new Set(excludedRoles.map((r) => r.toLowerCase()));
   const roleName = (id) => roles.get(id) || (id ? `Role ${id}` : 'No role');
   const groups = new Map();
   for (const s of shifts) {
-    if (s.deleted || s.soft_deleted || s.draft || exclude(s)) continue;
+    if (s.deleted || s.soft_deleted || s.draft) continue;
     const start = Date.parse(s.start);
     const end = Date.parse(s.end);
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
@@ -227,7 +244,7 @@ export function aggregateShifts(shifts, { timeZone, roles, wageFor = () => 0, ex
     g.shifts++;
     g.users.add(s.user_id);
     g.hours += hours;
-    g.cost += hours * shiftWage(s, wageFor(s));
+    if (!salaried(s)) g.cost += hours * shiftWage(s, wageFor(s));
   }
   return [...groups.values()].map(({ users, ...g }) => ({
     ...g,
@@ -265,8 +282,8 @@ export function effectiveWageCents(wages, roleId, cents = 0) {
  * True when the person is salaried for this role: their 7shifts wage for the
  * role (or, without one, every wage they have) is not hourly, or the wage on
  * the shift/punch is a salary-sized number. Salaried pay is not hours x rate,
- * so those shifts and punches are left out of hourly labor; the location's
- * salariedLaborPerDay setting covers it instead.
+ * so those shifts and punches count as hours only; the location's
+ * salariedLaborPerDay setting covers their pay instead.
  */
 export function isSalaried(wages, roleId, cents = 0) {
   if (num(cents) > IMPLAUSIBLE_HOURLY_CENTS) return true;
@@ -291,6 +308,17 @@ export function punchHours(p) {
   return Math.max(0, (b - a - Math.max(0, unpaid)) / 3600000);
 }
 
+/**
+ * Workweek start day from the SEVENSHIFTS_WEEK_START setting: 0 = Sunday,
+ * 1 = Monday (the default). Unset or empty means Monday: GitHub passes an
+ * unset repository variable as "", which once made it Sunday.
+ */
+export function weekStartSetting(value) {
+  const s = String(value ?? '').trim();
+  const n = Number(s);
+  return s !== '' && Number.isInteger(n) && n >= 0 && n <= 6 ? n : 1;
+}
+
 /** First day (YYYY-MM-DD) of the workweek containing `date`; weekStart 0 = Sunday, 1 = Monday. */
 export function weekStartOf(date, weekStart = 1) {
   const d = new Date(`${date}T12:00:00Z`);
@@ -301,12 +329,18 @@ export function weekStartOf(date, weekStart = 1) {
 /**
  * Splits each item's hours into regular and overtime: hours past
  * `weeklyLimit` in a workweek, per employee, across every location, in
- * clock-in order. Items are { user_id, clockedIn (ms), date, hours }; adds
- * `regular` and `overtime` to each and returns them.
+ * clock-in order. Items are { user_id, clockedIn (ms), date, hours, salaried };
+ * adds `regular` and `overtime` to each and returns them. Salaried items never
+ * have overtime.
  */
 export function allocateOvertime(items, { weekStart = 1, weeklyLimit = 40 } = {}) {
   const worked = new Map();
   for (const it of [...items].sort((a, b) => a.clockedIn - b.clockedIn)) {
+    if (it.salaried) {
+      it.regular = it.hours;
+      it.overtime = 0;
+      continue;
+    }
     const key = `${it.user_id}|${weekStartOf(it.date, weekStart)}`;
     const before = worked.get(key) || 0;
     it.regular = Math.max(0, Math.min(it.hours, weeklyLimit - before));
@@ -318,7 +352,9 @@ export function allocateOvertime(items, { weekStart = 1, weeklyLimit = 40 } = {}
 
 /**
  * labor_daily rows for one location from punch items ({ date, role, user_id,
- * wage ($/h), regular, overtime }), by business date and role.
+ * wage ($/h), regular, overtime, salaried }), by business date and role.
+ * Salaried items add hours but no cost (wage 0); `salaried_hours` reports
+ * them and is not stored.
  */
 export function punchLaborRows(items, { overtimeMultiplier = 1.5 } = {}) {
   const groups = new Map();
@@ -326,7 +362,7 @@ export function punchLaborRows(items, { overtimeMultiplier = 1.5 } = {}) {
     const key = `${it.date}|${it.role}`;
     let g = groups.get(key);
     if (!g) {
-      g = { business_date: it.date, job_title: it.role, users: new Set(), shifts: 0, regular_hours: 0, overtime_hours: 0, regular_cost: 0, overtime_cost: 0 };
+      g = { business_date: it.date, job_title: it.role, users: new Set(), shifts: 0, regular_hours: 0, overtime_hours: 0, regular_cost: 0, overtime_cost: 0, salaried_hours: 0 };
       groups.set(key, g);
     }
     g.users.add(it.user_id);
@@ -335,6 +371,7 @@ export function punchLaborRows(items, { overtimeMultiplier = 1.5 } = {}) {
     g.overtime_hours += it.overtime;
     g.regular_cost += it.regular * it.wage;
     g.overtime_cost += it.overtime * it.wage * overtimeMultiplier;
+    if (it.salaried) g.salaried_hours += it.hours;
   }
   return [...groups.values()]
     .map(({ users, ...g }) => ({
@@ -344,6 +381,7 @@ export function punchLaborRows(items, { overtimeMultiplier = 1.5 } = {}) {
       overtime_hours: round2(g.overtime_hours),
       regular_cost: round2(g.regular_cost),
       overtime_cost: round2(g.overtime_cost),
+      salaried_hours: round2(g.salaried_hours),
     }))
     .sort((a, b) => a.business_date.localeCompare(b.business_date) || a.job_title.localeCompare(b.job_title));
 }

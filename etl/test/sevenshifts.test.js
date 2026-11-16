@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   aggregateShifts, allocateOvertime, effectiveWageCents, hourlyWageCents, isSalaried, laborStatements, localDate, localMidnightUtc,
-  matchLocations, punchHours, punchLaborRows, weekStartOf,
+  matchLocations, punchHours, punchLaborRows, weekStartOf, weekStartSetting,
 } from '../src/sevenshifts.js';
 import { migratedDb } from '../../worker/test/d1.js';
 
@@ -44,14 +44,14 @@ test('aggregateShifts sums hours and cost by local date and role', () => {
   ]);
 });
 
-test('aggregateShifts leaves out excluded (salaried) shifts', () => {
+test('aggregateShifts counts salaried shifts as hours, without hours x wage cost', () => {
   const roles = new Map([[1, 'General Manager'], [2, 'Associate (BOH)']]);
   const shifts = [
     { user_id: 1, role_id: 1, start: '2026-11-02T14:00:00Z', end: '2026-11-02T23:00:00Z', hourly_wage: 750000 },
     { user_id: 2, role_id: 2, start: '2026-11-02T14:00:00Z', end: '2026-11-02T22:00:00Z', hourly_wage: 1700 },
   ];
-  const rows = aggregateShifts(shifts, { timeZone: 'America/New_York', roles, exclude: (s) => s.user_id === 1 });
-  assert.deepEqual(rows.map((r) => [r.role, r.hours, r.cost]), [['Associate (BOH)', 8, 136]]);
+  const rows = aggregateShifts(shifts, { timeZone: 'America/New_York', roles, salaried: (s) => s.user_id === 1 });
+  assert.deepEqual(rows.map((r) => [r.role, r.hours, r.cost, r.employees]), [['General Manager', 9, 0, 1], ['Associate (BOH)', 8, 136, 1]]);
 });
 
 test('isSalaried and hourlyWageCents read 7shifts wage types per role', () => {
@@ -85,6 +85,29 @@ test('weekStartOf finds the Monday (or Sunday) that starts the workweek', () => 
   assert.equal(weekStartOf('2026-11-07', 0), '2026-11-01'); // Sunday-start weeks
 });
 
+test('an unset or empty SEVENSHIFTS_WEEK_START means Monday, not Sunday', () => {
+  // GitHub Actions passes an unset repository variable as "", and Number("") is 0 (Sunday).
+  assert.equal(weekStartSetting(''), 1);
+  assert.equal(weekStartSetting(undefined), 1);
+  assert.equal(weekStartSetting('  '), 1);
+  assert.equal(weekStartSetting('0'), 0);
+  assert.equal(weekStartSetting('1'), 1);
+  assert.equal(weekStartSetting('Monday'), 1);
+});
+
+test('salaried punches add hours but no pay, and never overtime', () => {
+  const day = (d, hours, extra = {}) => ({ user_id: 9, remoteId: 'A', date: `2026-11-0${d}`, clockedIn: Date.parse(`2026-11-0${d}T14:00:00Z`), hours, role: 'General Manager', wage: 0, salaried: true, ...extra });
+  // A general manager working 5 x 10 h: 50 h, none of it overtime.
+  const items = allocateOvertime([day(2, 10), day(3, 10), day(4, 10), day(5, 10), day(6, 10)]);
+  assert.ok(items.every((i) => i.overtime === 0 && i.regular === 10));
+  const rows = punchLaborRows([...items, { user_id: 7, remoteId: 'A', date: '2026-11-06', clockedIn: 0, hours: 8, regular: 8, overtime: 0, role: 'Associate (BOH)', wage: 18 }]);
+  const fri = rows.filter((r) => r.business_date === '2026-11-06');
+  assert.deepEqual(fri.map((r) => [r.job_title, r.regular_hours, r.regular_cost, r.salaried_hours]), [
+    ['Associate (BOH)', 8, 144, 0],
+    ['General Manager', 10, 0, 10],
+  ]);
+});
+
 test('overtime is hours past 40 a week per employee, across days and locations', () => {
   const day = (d, hours, remoteId = 'A', user_id = 7) => ({ user_id, remoteId, date: `2026-11-0${d}`, clockedIn: Date.parse(`2026-11-0${d}T14:00:00Z`), hours, role: 'Associate (BOH)', wage: 20 });
   // Mon-Fri 9 h each (45 h): Friday is 4 h regular + 5 h overtime. Thursday is at another store.
@@ -98,7 +121,7 @@ test('overtime is hours past 40 a week per employee, across days and locations',
 
   const rows = punchLaborRows(items.filter((i) => i.remoteId === 'A'), { overtimeMultiplier: 1.5 });
   const fri = rows.find((r) => r.business_date === '2026-11-06');
-  assert.deepEqual(fri, { business_date: '2026-11-06', job_title: 'Associate (BOH)', shifts: 1, regular_hours: 4, overtime_hours: 5, regular_cost: 80, overtime_cost: 150, employees: 1 });
+  assert.deepEqual(fri, { business_date: '2026-11-06', job_title: 'Associate (BOH)', shifts: 1, regular_hours: 4, overtime_hours: 5, regular_cost: 80, overtime_cost: 150, salaried_hours: 0, employees: 1 });
   const tue = rows.find((r) => r.business_date === '2026-11-03');
   assert.deepEqual([tue.employees, tue.shifts, tue.regular_hours], [2, 2, 15]);
 });
