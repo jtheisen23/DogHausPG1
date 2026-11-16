@@ -75,8 +75,8 @@ The header logo is `public/logo.webp` and the browser-tab icon is `public/favico
 2. Note the **client ID** and **client secret**, and each location's **restaurant GUID**.
 3. Copy `config/locations.example.json` and fill in one entry per location. `id` is a short code
    such as `HB` that the dashboard uses in permissions. `salariedLaborPerDay` (optional) adds
-   salaried managers' daily cost to labor (e.g. the location's salaried pay per year ÷ 365),
-   because actual labor only covers hourly time punches.
+   salaried managers' daily cost to labor (e.g. the location's salaried pay per year ÷ 365). With
+   7shifts it's only a fallback: salaried pay then comes from the managers' 7shifts wages.
 
 ### 2. Cloudflare database and Worker
 ```bash
@@ -157,14 +157,32 @@ every synced day from 7shifts (a day without punches has no hourly labor), and t
 backfill always skip labor. The *7shifts* tab (users with the **7shifts** box ticked in
 Admin, for their own locations; labor and sales figures follow the Labor and Sales permissions)
 compares scheduled labor from 7shifts with actual labor and shows the next 14 days of schedule.
-Salaried people (7shifts wage type not hourly, e.g. General Managers) are left out of both scheduled
-and actual hourly labor; add their cost with `salariedLaborPerDay`. To load 7shifts history (schedule,
+Salaried people (7shifts wage type not hourly, e.g. General Managers) count toward scheduled and
+actual hours, as in 7shifts, but their pay isn't hours × wage; their hours past 40 a week count as
+overtime hours (as 7shifts counts them) without any overtime pay. Their
+pay is spread the way 7shifts spreads it in Daily Sales & Labor: the weekly salary (annual ÷ 52)
+is split across locations by the wage's allocations (or by where they worked that week), then
+evenly over its allocation days, whether or not they work them. It's counted for each workweek a
+salaried person worked or was scheduled, and shows under their role (e.g. General Manager). It
+replaces `salariedLaborPerDay`, which is used only when 7shifts has no salaries. The sync log
+shows hourly pay only, because the log is public.
+
+**Totals match 7shifts exactly.** Each sync also reads 7shifts' own Daily Sales & Labor report
+(The Works plan or higher) and matches every location's daily totals to it: actual hours,
+overtime hours and labor $, and scheduled hours and labor $. The breakdown by role still comes
+from punches, shifts and wages; a *7shifts adjustment* row per day carries the difference. It's
+mostly salaried pay that 7shifts books somewhere other than where the manager worked (for example
+salaried wages without a location allocation in 7shifts). Giving every salaried wage a location
+allocation in 7shifts keeps the adjustment small. Days the report doesn't cover keep the
+dashboard's own calculation. Overtime weeks start on Monday unless the repository variable
+`SEVENSHIFTS_WEEK_START` says otherwise (0 = Sunday). To load 7shifts history (schedule,
 labor and log book), run *Toast sync* with *sevenshifts_only* and *logbook_all* ticked and a start
 date such as 2025-01-01. Add a GitHub secret
 `SEVENSHIFTS_ACCESS_TOKEN` (7shifts → Settings → Developer tools → Access tokens); each Toast sync
 then also loads published shifts for the last few days and the next 14. Run *Actions → 7shifts
-connection check* to confirm the token, how 7shifts locations match the dashboard's, and what a
-week of time punches looks like (names are matched; add `"sevenShiftsId": <id>` to a location in `LOCATIONS_JSON` to pin one). File Toast jobs
+connection check* to confirm the token, how 7shifts locations match the dashboard's, what a
+week of time punches looks like, and how the last 7 days' hours and sales compare with 7shifts' own
+Daily Sales & Labor report (no dollar amounts are printed, since the log is public; names are matched; add `"sevenShiftsId": <id>` to a location in `LOCATIONS_JSON` to pin one). File Toast jobs
 under 7shifts roles in *Admin → Category groups → Labor jobs*; the Labor and 7shifts tabs then group
 jobs by role (each role expands to its jobs). The tab also has a **Log book** section with every
 7shifts log book entry for the user's assigned locations, filterable by location, category and
@@ -215,7 +233,7 @@ added to the Access policy (step 3) by hand.
 | Net sales | Gross sales − discounts. Tax, tips and service charges are tracked separately |
 | Voids | Value of voided items, checks and orders |
 | Avg check | Net sales ÷ orders |
-| Labor $ | From hourly 7shifts time punches: paid hours (clock-out − clock-in − unpaid breaks) × wage, with hours past 40 per employee per Monday–Sunday week (all locations) as overtime × wage × 1.5, plus any configured salaried cost per day. Salaried people are not in the punches' cost. Toast time entries are not used |
+| Labor $ | From hourly 7shifts time punches: paid hours (clock-out − clock-in − unpaid breaks) × wage, with hours past 40 per employee per Monday–Sunday week (all locations) as overtime × wage × 1.5, plus salaried managers' pay from their 7shifts wages (weekly salary spread over their allocation days and locations, as 7shifts does). Salaried people's punches add hours (past 40 a week, overtime hours) but no hours × wage cost. Each day's total is then matched to 7shifts' Daily Sales & Labor (the *7shifts adjustment* row). Toast time entries are not used |
 | Labor % | Labor $ ÷ net sales |
 | SPLH | Net sales ÷ labor hours |
 | Hour of day | Hour the order was opened, in the location's time zone |

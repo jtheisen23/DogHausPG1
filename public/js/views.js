@@ -896,7 +896,7 @@ export async function sevenShifts(ctx) {
 
   const tiles = [
     kpi('Scheduled hours', S.hours, null, { format: fmt.int }),
-    hasActual && kpi('Actual hours (Toast)', A.hours, null, { format: fmt.int }),
+    hasActual && kpi('Actual hours', A.hours, null, { format: fmt.int }),
     hasActual && kpi('Hours over schedule', variance(A.hours, S.hours), null, { format: (v) => (v === null ? '—' : `${v > 0 ? '+' : ''}${fmt.int(v)}`) }),
     kpi('Scheduled labor $', S.cost, null, { format: fmt.money }),
     hasActual && kpi('Actual labor $', A.cost, null, { format: fmt.money }),
@@ -922,7 +922,7 @@ export async function sevenShifts(ctx) {
       categories: days.map((d) => `${fmtWeekday(d)} ${fmtDate(d)}`),
       series: [
         { name: 'Scheduled (7shifts)', color: 'compare', data: days.map((d) => sm.get(d) ?? null) },
-        ...(am ? [{ name: 'Actual (Toast)', colorIndex: 0, data: days.map((d) => am.get(d) ?? null) }] : []),
+        ...(am ? [{ name: 'Actual (7shifts punches)', colorIndex: 0, data: days.map((d) => am.get(d) ?? null) }] : []),
       ],
       format: money ? fmt.money : fmt.dec1,
       axisFormat: money ? fmt.moneyShort : fmt.int,
@@ -971,7 +971,7 @@ export async function sevenShifts(ctx) {
     filename: 'scheduled-vs-actual-by-location',
   });
 
-  // By role. Toast jobs count toward the 7shifts role they're mapped to in
+  // By role. Labor jobs count toward the 7shifts role they're mapped to in
   // Admin > Category groups > Labor jobs (else matched by name) and expand.
   const key = (n) => String(n || '').trim().toLowerCase();
   const roles = new Map();
@@ -987,16 +987,17 @@ export async function sevenShifts(ctx) {
     const row = {
       ...r,
       vHours: r.sHours !== null && r.aHours !== null ? r.aHours - r.sHours : null,
-      source: r.sHours === null ? 'Toast only' : r.aHours === null ? '7shifts only' : 'Both',
+      source: r.sHours === null ? 'Actual only' : r.aHours === null ? 'Scheduled only' : 'Both',
     };
     if (jobs.length > 1 || (jobs.length === 1 && key(jobs[0].source_name) !== key(r.name))) {
       row.children = jobs
-        .map((j) => ({ name: j.source_name, sHours: null, sCost: null, aHours: j.hours, aCost: j.cost, vHours: null, source: 'Toast job' }))
+        .map((j) => ({ name: j.source_name, sHours: null, sCost: null, aHours: j.hours, aCost: j.cost, vHours: null, source: 'Job' }))
         .sort((a, b) => b.aHours - a.aHours);
     }
     return row;
   });
-  const unmapped = hasActual ? roleRows.filter((r) => r.source === 'Toast only').length : 0;
+  // "Salaried" (the configured salaried cost) and the 7shifts adjustment aren't jobs to map.
+  const unmapped = hasActual ? roleRows.filter((r) => r.source === 'Actual only' && !['salaried', '7shifts adjustment'].includes(key(r.name))).length : 0;
   const roleTable = dataTable({
     columns: [
       { key: 'name', label: 'Role / job', text: true },
@@ -1058,12 +1059,12 @@ export async function sevenShifts(ctx) {
   const synced = data.sync.map((r) => r.synced_at).sort().pop();
   const node = h('div', {},
     h('div', { class: 'notice' },
-      `Scheduled = published 7shifts shifts (open shifts counted separately).${hasActual ? ' Actual = Toast time entries. Register is left out of both.' : ''} Last 7shifts sync ${new Date(synced).toLocaleString()}.`),
+      `Scheduled = published 7shifts shifts (open shifts counted separately).${hasActual ? ' Actual = 7shifts time punches.' : ''} Salaried managers' hours are included. Each day's totals match 7shifts' Daily Sales & Labor; the "7shifts adjustment" row is the difference from the role breakdown (mostly salaried pay that 7shifts books differently). Last 7shifts sync ${new Date(synced).toLocaleString()}.`),
     h('div', { class: 'grid kpis' }, tiles),
     card(hasActual ? 'Scheduled vs actual by day' : 'Scheduled by day', fmtRange(ctx.q.current), metricSeg, dailyEl),
     card('By location', fmtRange(ctx.q.current), csvButton(() => locTable), locTable.el),
-    card('By role', hasActual ? `${fmtRange(ctx.q.current)} · Toast jobs roll up under the 7shifts role they're mapped to` : fmtRange(ctx.q.current), csvButton(() => roleTable), 
-      unmapped && ctx.user.isAdmin ? h('div', { class: 'notice' }, `${unmapped} Toast job${unmapped === 1 ? ' isn\'t' : 's aren\'t'} mapped to a 7shifts role yet. Map them in Admin → Category groups → Labor jobs.`) : null,
+    card('By role', hasActual ? `${fmtRange(ctx.q.current)} · labor jobs roll up under the 7shifts role they're mapped to` : fmtRange(ctx.q.current), csvButton(() => roleTable),
+      unmapped && ctx.user.isAdmin ? h('div', { class: 'notice' }, `${unmapped} labor job${unmapped === 1 ? ' isn\'t' : 's aren\'t'} mapped to a 7shifts role yet. Map them in Admin → Category groups → Labor jobs.`) : null,
       roleTable.el),
     await logBookCard(ctx),
     card('Upcoming schedule', hasSales ? 'Next 14 days · projected sales = average of the same weekday over the last 4 weeks' : 'Next 14 days', csvButton(() => upTable), upEl, upTable.el),
