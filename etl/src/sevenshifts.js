@@ -605,6 +605,9 @@ export function reconcileActual(rows, report, start, end) {
   for (const date of eachDate(start, end)) {
     const t = report.get(date);
     if (!t || !isNum(t.actual_labor_cost) || !isNum(t.actual_labor_minutes)) continue;
+    // A day 7shifts reports as empty (e.g. before its report covered the
+    // location) would wipe out real punches: keep ours.
+    if (t.actual_labor_minutes === 0 && t.actual_labor_cost === 0) continue;
     days++;
     const mine = out.filter((r) => r.business_date === date);
     const ot = isNum(t.actual_ot_minutes) ? t.actual_ot_minutes / 60 - total(mine, (r) => r.overtime_hours) : 0;
@@ -630,6 +633,7 @@ export function reconcileScheduled(rows, report, start, end) {
   for (const date of eachDate(start, end)) {
     const t = report.get(date);
     if (!t || !isNum(t.projected_labor_cost) || !isNum(t.projected_labor_minutes)) continue;
+    if (t.projected_labor_minutes === 0 && t.projected_labor_cost === 0) continue; // empty in 7shifts: keep ours
     days++;
     const mine = out.filter((r) => r.business_date === date);
     const hours = t.projected_labor_minutes / 60 - total(mine, (r) => r.hours);

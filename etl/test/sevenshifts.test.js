@@ -206,6 +206,10 @@ test('daily totals are matched to 7shifts Daily Sales & Labor with one adjustmen
   assert.equal(day.reduce((s, r) => s + r.regular_cost + r.overtime_cost, 0), 520);
   // Running it again replaces the adjustment rather than adding another.
   assert.deepEqual(reconcileActual(rows, report, '2026-11-09', '2026-11-11').rows, rows);
+  // A day 7shifts reports as empty doesn't wipe out real punches.
+  const empty = reportByDate([{ date: '2026-11-11', actual_labor_minutes: 0, actual_ot_minutes: 0, actual_labor_cost: 0, projected_labor_minutes: 0, projected_labor_cost: 0 }]);
+  assert.deepEqual(reconcileActual(actual, empty, '2026-11-11', '2026-11-11'), { rows: actual.slice().sort((a, b) => a.business_date.localeCompare(b.business_date) || a.job_title.localeCompare(b.job_title)), days: 0 });
+  assert.equal(reconcileScheduled([{ business_date: '2026-11-11', role: 'Associate (BOH)', hours: 8, cost: 144 }], empty, '2026-11-11', '2026-11-11').days, 0);
 
   const sched = reconcileScheduled([{ business_date: '2026-11-09', role: 'Associate (BOH)', shifts: 2, employees: 2, hours: 18, cost: 324, open_shifts: 0, open_hours: 0 }], report, '2026-11-09', '2026-11-10');
   assert.equal(sched.days, 2);
