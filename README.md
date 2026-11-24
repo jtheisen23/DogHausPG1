@@ -63,9 +63,10 @@ npm run dev                             # http://localhost:8787
 To test a restricted user, change `DEV_USER_EMAIL` in `.dev.vars` to `dt.manager@example.com`
 (a demo viewer who can only see Downtown) and restart `npm run dev`.
 
-The header shows the name "Dog Haus PG1 Dashboard" (`public/index.html`) and the browser-tab icon is
-`public/favicon.svg`. To show a logo instead, add the image to `public/` and put an
-`<img src="/logo.webp" alt="…" height="48">` in the header's `.brand` block.
+The header logo is `public/logo.png`, the browser-tab icon `public/favicon.png` and the phone
+home-screen icon `public/apple-touch-icon.png`, all made from `assets/brand/dog-haus-logo-source.jpeg`.
+The colors follow the logo: its tan (`--brand`) and a deeper gold of the same hue for links and
+buttons (`--accent`), with location colors `--s1`…`--s8` starting from that gold (`public/styles.css`).
 
 ## Production setup
 
