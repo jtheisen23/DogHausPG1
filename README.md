@@ -93,7 +93,7 @@ so every push to `main` deploys. In the Worker's
 branches: they fail, and preview URLs can't sign in through Access anyway. Only `main` deploys. Then, in the Worker's
 **Settings → Variables and Secrets**, add a **secret** `BOOTSTRAP_ADMINS` with your email, so you
 can't lock yourself out. `keep_vars = true` in `wrangler.toml` stops deploys from erasing it.
-The `Database migrations` GitHub workflow creates or updates the tables using the secrets from step 4. The dashboard is at `https://doghaus-pg1.<your-workers-subdomain>.workers.dev`.
+The `Database migrations` GitHub workflow creates or updates the tables using the secrets from step 4. The dashboard is at `https://doghaus-pg1.doghauspg1.workers.dev`.
 You can add a custom domain later under the Worker's **Settings → Domains & Routes**.
 
 ### 3. Cloudflare Access (logins)
