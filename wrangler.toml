@@ -24,10 +24,9 @@ AUTH_MODE = "access"
 # (GITHUB_DISPATCH_TOKEN) is a secret set in the Cloudflare dashboard.
 GITHUB_REPO = "jtheisen23/DogHausPG1"
 # Zero Trust team domain that issues the login tokens (Zero Trust > Settings > Team domain).
-ACCESS_TEAM_DOMAIN = "REPLACE_WITH_TEAM.cloudflareaccess.com"
+ACCESS_TEAM_DOMAIN = "doghaus-pg1.cloudflareaccess.com"
 # Application Audience (AUD) tag from Zero Trust > Access controls > Applications > doghaus-pg1.
-# Until this and ACCESS_TEAM_DOMAIN are set, the API refuses every request.
-ACCESS_AUD = "REPLACE_WITH_ACCESS_AUD_TAG"
+ACCESS_AUD = "ae2d49c01fa8b43aa8e8c4f572694175a6675eeeab72abe3f82db4fbd0c388b2"
 # BOOTSTRAP_ADMINS (comma-separated emails that are always admins) is set as a
 # secret in the Cloudflare dashboard so it isn't published in this repo.
 
