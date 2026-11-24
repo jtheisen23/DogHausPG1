@@ -11,7 +11,7 @@
 //   ACCESS_POLICY_TOKEN    Worker secret: Cloudflare API token with
 //                          Account > Access: Apps and Policies > Edit
 //   CLOUDFLARE_ACCOUNT_ID  wrangler.toml var
-//   ACCESS_POLICY_NAME     wrangler.toml var, e.g. "Mogu dashboard users"
+//   ACCESS_POLICY_NAME     wrangler.toml var, e.g. "Dog Haus PG1 dashboard users"
 
 const API = 'https://api.cloudflare.com/client/v4';
 

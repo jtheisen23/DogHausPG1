@@ -1,6 +1,6 @@
-# Mogu Chinese Dashboard
+# Dog Haus PG1 Dashboard
 
-A multi-location dashboard for Mogu Chinese. It shows sales, discounts & comps, labor and menu items,
+A multi-location dashboard for Dog Haus PG1. It shows sales, discounts & comps, labor and menu items,
 lets you compare locations and time periods, and controls who can see what. Data comes from the
 **Toast API**, logins go through **Cloudflare Access**, and it runs on Cloudflare's $5/month
 Workers Paid plan (everything else is free).
@@ -63,7 +63,9 @@ npm run dev                             # http://localhost:8787
 To test a restricted user, change `DEV_USER_EMAIL` in `.dev.vars` to `dt.manager@example.com`
 (a demo viewer who can only see Downtown) and restart `npm run dev`.
 
-The header logo is `public/logo.webp` and the browser-tab icon is `public/favicon.png`.
+The header shows the name "Dog Haus PG1 Dashboard" (`public/index.html`) and the browser-tab icon is
+`public/favicon.svg`. To show a logo instead, add the image to `public/` and put an
+`<img src="/logo.webp" alt="…" height="48">` in the header's `.brand` block.
 
 ## Production setup
 
@@ -81,29 +83,29 @@ The header logo is `public/logo.webp` and the browser-tab icon is `public/favico
 ### 2. Cloudflare database and Worker
 ```bash
 npx wrangler login
-npx wrangler d1 create mogu             # copy the database_id into wrangler.toml
+npx wrangler d1 create doghaus-pg1      # copy the database_id into wrangler.toml
 npm run db:migrate:remote
 ```
 Run `npm run deploy`, or connect the repo under *Workers & Pages → Create → Import a repository*
-(project name `mogu`, matching `name` in `wrangler.toml`; deploy command `npx wrangler deploy`)
+(project name `doghaus-pg1`, matching `name` in `wrangler.toml`; deploy command `npx wrangler deploy`)
 so every push to `main` deploys. In the Worker's
 **Settings → Build → Branch control**, turn **off** builds for preview (non-production)
 branches: they fail, and preview URLs can't sign in through Access anyway. Only `main` deploys. Then, in the Worker's
 **Settings → Variables and Secrets**, add a **secret** `BOOTSTRAP_ADMINS` with your email, so you
 can't lock yourself out. `keep_vars = true` in `wrangler.toml` stops deploys from erasing it.
-The `Database migrations` GitHub workflow creates or updates the tables using the secrets from step 4. The dashboard is at `https://mogu.mogu-7d2.workers.dev`.
+The `Database migrations` GitHub workflow creates or updates the tables using the secrets from step 4. The dashboard is at `https://doghaus-pg1.<your-workers-subdomain>.workers.dev`.
 You can add a custom domain later under the Worker's **Settings → Domains & Routes**.
 
 ### 3. Cloudflare Access (logins)
-1. In the Cloudflare dashboard, open **Zero Trust**. Pick a team name (for example `mogu`),
-   which gives you `mogu.cloudflareaccess.com`, and choose the Free plan.
+1. In the Cloudflare dashboard, open **Zero Trust**. Pick a team name (for example `doghaus-pg1`),
+   which gives you `doghaus-pg1.cloudflareaccess.com`, and choose the Free plan.
 2. Under **Settings → Authentication**, add login methods. *One-time PIN* (a code sent by
    email) works for everyone; Google or Microsoft are optional.
 3. Under **Access → Applications → Add an application → Self-hosted**, enter the dashboard's
    hostname. Add an **Allow** policy that lists the emails (or email domain) allowed to sign in.
    You can also turn on Access from the Worker's **Settings → Domains & Routes** page.
 4. Copy the application's **Audience (AUD) tag**. In `wrangler.toml`, set `ACCESS_AUD` to that tag
-   and `ACCESS_TEAM_DOMAIN = "mogu.cloudflareaccess.com"`, then run `npm run deploy` again.
+   and `ACCESS_TEAM_DOMAIN = "doghaus-pg1.cloudflareaccess.com"`, then run `npm run deploy` again.
 
 Until both values are set (the `REPLACE_…` placeholders count as unset), the API refuses every
 request (it fails closed).
@@ -131,7 +133,7 @@ writes nothing and doesn't need the Cloudflare secrets.
 also re-syncs the last 7 days, so late edits and tip adjustments are picked up. **History** is
 loaded by `.github/workflows/toast-backfill.yml`. Every night it works backwards from the
 earliest loaded day toward its `from` date (default 2025-01-01), and stops after 1,000,000 D1
-rows written: enough for all of Mogu's history (about 110 rows per location-day) in one run of
+rows written: enough for a full history (about 110 rows per location-day) in one run of
 2–3 hours. That relies on the Workers Paid plan. On the free plan (100k rows written/day, of which
 the regular syncs use about 40,000 with 7 locations) run it with `max_rows` 40000. Once history is complete it does nothing. To
 go further back, run *Actions → Toast history backfill → Run workflow* with an earlier date. For a
@@ -151,7 +153,7 @@ also finish the previous day. They need a Worker **secret** `GITHUB_DISPATCH_TOK
 token limited to this repository with **Actions: Read and write** permission. GitHub's own
 schedule keeps only the 8:40 UTC 7-day re-sync as a backup.
 
-**7shifts:** Mogu's **actual labor** (the Labor tab, labor %, SPLH) comes from **7shifts time
+**7shifts:** **Actual labor** (the Labor tab, labor %, SPLH) comes from **7shifts time
 punches** and only from them: Toast time entries are never used. Each sync rewrites labor for
 every synced day from 7shifts (a day without punches has no hourly labor), and the Toast sync and
 backfill always skip labor. The *7shifts* tab (users with the **7shifts** box ticked in
@@ -188,7 +190,7 @@ jobs by role (each role expands to its jobs). The tab also has a **Log book** se
 7shifts log book entry for the user's assigned locations, filterable by location, category and
 text. Each sync refreshes recent days; run *Toast sync* with *logbook_all* ticked to reload all history.
 Attachments open through the Worker, which needs the same token as a Worker **secret**
-`SEVENSHIFTS_ACCESS_TOKEN` (Workers & Pages → mogu → Settings → Variables and Secrets).
+`SEVENSHIFTS_ACCESS_TOKEN` (Workers & Pages → doghaus-pg1 → Settings → Variables and Secrets).
 
 > GitHub pauses scheduled workflows after 60 days with no activity in the repo. If that happens,
 > re-enable the workflow from the Actions tab.
@@ -211,7 +213,7 @@ applied when the dashboard reads data, so they cover all history immediately and
 stored Toast data.
 
 **Sign-in access is updated for you.** Saving a user in Admin also adds their email to the
-Cloudflare Access policy *Mogu dashboard users*, so they can sign in right away; disabling or
+Cloudflare Access policy *Dog Haus PG1 dashboard users*, so they can sign in right away; disabling or
 removing them takes it out again. Admins in `BOOTSTRAP_ADMINS` always stay in. The Admin page
 shows the result after each save, and if Cloudflare refuses the update the user is still saved
 and the message says why. Rules in that policy other than individual emails (for example

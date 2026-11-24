@@ -3,7 +3,7 @@
 // before Toast credentials are connected. Never run this against production.
 //
 //   node etl/src/demo.js --out .tmp/demo.sql [--start 2024-07-01] [--end 2026-09-24]
-//   npx wrangler d1 execute mogu --local --file .tmp/demo.sql
+//   npx wrangler d1 execute doghaus-pg1 --local --file .tmp/demo.sql
 
 import { parseArgs } from 'node:util';
 import { addDays, eachDate, parseDate, todayIn } from './dates.js';
