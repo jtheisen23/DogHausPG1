@@ -1,5 +1,5 @@
 # Must match the Worker's name in the Cloudflare dashboard (Workers Builds checks it).
-name = "mogu"
+name = "doghaus-pg1"
 main = "worker/src/index.js"
 compatibility_date = "2025-09-01"
 # Keep variables/secrets set in the Cloudflare dashboard (e.g. BOOTSTRAP_ADMINS) on deploy.
@@ -14,19 +14,20 @@ run_worker_first = ["/api/*"]
 
 [[d1_databases]]
 binding = "DB"
-database_name = "mogu"
-database_id = "74334217-55c0-4cf7-96c3-8668dd310aae"
+database_name = "doghaus-pg1"
+database_id = "60d086ac-ccb3-4675-91a7-568e92b3ed48"
 migrations_dir = "db/migrations"
 
 [vars]
 AUTH_MODE = "access"
 # Repository whose "Toast sync" workflow the cron triggers start. The token
 # (GITHUB_DISPATCH_TOKEN) is a secret set in the Cloudflare dashboard.
-GITHUB_REPO = "jtheisen23/Mogu"
+GITHUB_REPO = "jtheisen23/DogHausPG1"
 # Zero Trust team domain that issues the login tokens (Zero Trust > Settings > Team domain).
-ACCESS_TEAM_DOMAIN = "mogu-dashboard.cloudflareaccess.com"
-# Application Audience (AUD) tag from Zero Trust > Access controls > Applications > mogu.
-ACCESS_AUD = "a0161db3d22146df93ee378b9a49097394a9a7e9fd4723487400050a2d87820d"
+ACCESS_TEAM_DOMAIN = "REPLACE_WITH_TEAM.cloudflareaccess.com"
+# Application Audience (AUD) tag from Zero Trust > Access controls > Applications > doghaus-pg1.
+# Until this and ACCESS_TEAM_DOMAIN are set, the API refuses every request.
+ACCESS_AUD = "REPLACE_WITH_ACCESS_AUD_TAG"
 # BOOTSTRAP_ADMINS (comma-separated emails that are always admins) is set as a
 # secret in the Cloudflare dashboard so it isn't published in this repo.
 
@@ -34,8 +35,9 @@ ACCESS_AUD = "a0161db3d22146df93ee378b9a49097394a9a7e9fd4723487400050a2d87820d"
 # can sign in without being added in Cloudflare too (worker/src/access-policy.js).
 # Needs the Worker secret ACCESS_POLICY_TOKEN (Account > Access: Apps and
 # Policies > Edit); without it, add people to the policy by hand.
-CLOUDFLARE_ACCOUNT_ID = "7d20b7f0a3e286432148a680b2ce5969"
-ACCESS_POLICY_NAME = "Mogu dashboard users"
+# Cloudflare account "Dog Haus PG1".
+CLOUDFLARE_ACCOUNT_ID = "0a0a421dcf08c2ca33fc134180d17698"
+ACCESS_POLICY_NAME = "Dog Haus PG1 dashboard users"
 
 # Starts the Toast sync on GitHub Actions (worker/src/scheduler.js). Times are UTC:
 # hourly at :17, plus 8:40 UTC (~4:40am Eastern, 3:40am in winter) for the 7-day recheck.
