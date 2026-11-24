@@ -6,6 +6,22 @@ import { dirname } from 'node:path';
 
 const MAX_REQUEST_BYTES = 90_000;
 
+/**
+ * Values pasted into GitHub secrets often pick up a trailing newline, spaces
+ * or quotes, which then break the request URL or header. Strip them.
+ */
+export function cleanSecret(value) {
+  return String(value ?? '').trim().replace(/^["'`]+|["'`]+$/g, '').trim();
+}
+
+/** Throws a readable error for a malformed ID, describing it without printing it. */
+export function checkId(name, value, pattern, expected) {
+  if (pattern.test(value)) return;
+  const odd = [...new Set(value.replace(/[0-9a-z-]/gi, ''))].map((c) => JSON.stringify(c)).join(' ');
+  throw new Error(`${name} doesn't look like ${expected}: it has ${value.length} characters` +
+    (odd ? ` and contains ${odd}` : '') + '. Re-enter the secret with only the ID.');
+}
+
 export class FileSink {
   constructor(path) {
     this.path = path;
@@ -20,9 +36,15 @@ export class FileSink {
 
 export class D1Sink {
   constructor({ accountId, databaseId, apiToken, log = console.error }) {
+    accountId = cleanSecret(accountId);
+    databaseId = cleanSecret(databaseId);
+    apiToken = cleanSecret(apiToken);
     if (!accountId || !databaseId || !apiToken) {
       throw new Error('CLOUDFLARE_ACCOUNT_ID, D1_DATABASE_ID and CLOUDFLARE_API_TOKEN are required (or pass --out file.sql)');
     }
+    checkId('D1_DATABASE_ID', databaseId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      'the database ID, 36 characters like 01234567-89ab-cdef-0123-456789abcdef');
+    checkId('CLOUDFLARE_ACCOUNT_ID', accountId, /^[0-9a-f]{32}$/i, 'the account ID, 32 letters and digits');
     const base = (process.env.CLOUDFLARE_API_BASE || 'https://api.cloudflare.com/client/v4').replace(/\/$/, '');
     this.url = `${base}/accounts/${accountId}/d1/database/${databaseId}/query`;
     this.apiToken = apiToken;
