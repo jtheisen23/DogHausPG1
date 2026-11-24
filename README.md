@@ -153,10 +153,16 @@ also finish the previous day. They need a Worker **secret** `GITHUB_DISPATCH_TOK
 token limited to this repository with **Actions: Read and write** permission. GitHub's own
 schedule keeps only the 8:40 UTC 7-day re-sync as a backup.
 
-**7shifts:** **Actual labor** (the Labor tab, labor %, SPLH) comes from **7shifts time
-punches** and only from them: Toast time entries are never used. Each sync rewrites labor for
-every synced day from 7shifts (a day without punches has no hourly labor), and the Toast sync and
-backfill always skip labor. The *7shifts* tab (users with the **7shifts** box ticked in
+**Where labor comes from:** until the `SEVENSHIFTS_ACCESS_TOKEN` secret is set, **actual labor**
+(the Labor tab, labor %, SPLH) comes from **Toast time entries**: hours × each entry's hourly wage,
+overtime at `OVERTIME_MULTIPLIER` (1.5×), by Toast job, plus `salariedLaborPerDay` if a location sets
+it (Toast doesn't know salaried pay). Once the token is set, the Toast sync and backfill skip labor
+and it comes only from 7shifts, as described below. Days loaded before then keep their Toast labor
+until 7shifts re-syncs them: run *Toast sync* with *sevenshifts_only* ticked and a start date such as
+2025-01-01.
+
+**7shifts:** with 7shifts, **actual labor** comes from **7shifts time punches** and only from them.
+Each sync rewrites labor for every synced day from 7shifts (a day without punches has no hourly labor). The *7shifts* tab (users with the **7shifts** box ticked in
 Admin, for their own locations; labor and sales figures follow the Labor and Sales permissions)
 compares scheduled labor from 7shifts with actual labor and shows the next 14 days of schedule.
 Salaried people (7shifts wage type not hourly, e.g. General Managers) count toward scheduled and
