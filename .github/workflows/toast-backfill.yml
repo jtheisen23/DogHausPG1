@@ -32,8 +32,8 @@ jobs:
     # All history is about 2-3 hours; an interrupted run resumes on the next one.
     timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       - name: Load the next slice of history
@@ -46,8 +46,13 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
           OVERTIME_MULTIPLIER: ${{ vars.OVERTIME_MULTIPLIER }}
+          HAS_7SHIFTS: ${{ secrets.SEVENSHIFTS_ACCESS_TOKEN != '' }}
           # Passed through env, not interpolated into the script.
           IN_FROM: ${{ inputs.from || '2025-01-01' }}
           IN_MAX_ROWS: ${{ inputs.max_rows || '1000000' }}
-        # Labor comes only from 7shifts, never from Toast time entries.
-        run: node etl/src/index.js --backfill --from "$IN_FROM" --max-rows "$IN_MAX_ROWS" --skip-labor
+        # Labor comes from 7shifts once SEVENSHIFTS_ACCESS_TOKEN is set (the 7shifts
+        # sync loads it); until then it comes from Toast time entries.
+        run: |
+          args=(--backfill --from "$IN_FROM" --max-rows "$IN_MAX_ROWS")
+          [ "$HAS_7SHIFTS" = "true" ] && args+=(--skip-labor)
+          node etl/src/index.js "${args[@]}"

@@ -48,8 +48,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
       # The ETL has no npm dependencies, so there is nothing to install.
@@ -64,6 +64,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           D1_DATABASE_ID: ${{ secrets.D1_DATABASE_ID }}
           OVERTIME_MULTIPLIER: ${{ vars.OVERTIME_MULTIPLIER }}
+          # 'true' once the 7shifts token is saved (the token itself isn't exposed here).
+          HAS_7SHIFTS: ${{ secrets.SEVENSHIFTS_ACCESS_TOKEN != '' }}
           # Inputs are passed through env (not interpolated into the script) to avoid shell injection.
           IN_START: ${{ inputs.start }}
           IN_END: ${{ inputs.end }}
@@ -72,8 +74,10 @@ jobs:
           IN_REVENUE_CENTERS_ONLY: ${{ inputs.revenue_centers_only }}
           SCHEDULE: ${{ github.event.schedule }}
         run: |
-          # Labor comes only from 7shifts (next step), never from Toast time entries.
-          args=(--skip-labor)
+          # Labor comes from 7shifts (next step) once SEVENSHIFTS_ACCESS_TOKEN is set;
+          # until then it comes from Toast time entries.
+          args=()
+          [ "$HAS_7SHIFTS" = "true" ] && args+=(--skip-labor)
           if [ -n "$IN_START" ]; then
             args+=(--start "$IN_START")
             [ -n "$IN_END" ] && args+=(--end "$IN_END")
