@@ -13,7 +13,8 @@ import { parseArgs } from 'node:util';
 import { addDays, parseDate, todayIn, toToastDate } from './dates.js';
 import { loadLocations } from './config.js';
 import { ToastClient } from './toast.js';
-import { aggregateLabor, aggregateOrders } from './transform.js';
+import { aggregateLabor, aggregateOrders, laborHoursByHour } from './transform.js';
+import { kitchenTitles } from '../../worker/src/kitchen.js';
 
 const { values: args } = parseArgs({
   options: {
@@ -102,6 +103,33 @@ function ticketTimeLine(orders, sales) {
   return mins.length
     ? `Ticket times: ${mins.length} of ${sales.daily.orders} orders have an item bumped to READY (median ${median.toFixed(1)} min). Item statuses: ${seen}.`
     : `⚠️ Ticket times: 0 of ${sales.daily.orders} orders have an item bumped to READY, so the Kitchen card stays hidden for this location. Item statuses: ${seen}.`;
+}
+
+/**
+ * Kitchen tab staffing chart: job titles on the clock, the hours that count as
+ * kitchen staff (KITCHEN_JOB_TITLES, default Kitchen and Expo) and how many of the
+ * day's hours have >= 3 orders, >= 0.25 kitchen hours and a timed ticket (the
+ * chart needs 6 such hours over its 8 weeks).
+ */
+function staffingLines(entries, sales, date, ctx) {
+  const kitchen = kitchenTitles(process.env);
+  const rows = laborHoursByHour(entries, ctx);
+  const byTitle = new Map();
+  for (const r of rows) byTitle.set(r.job_title, (byTitle.get(r.job_title) || 0) + r.hours);
+  const isKitchen = (t) => kitchen.has(t.trim().toLowerCase());
+  const titles = [...byTitle].sort((a, b) => b[1] - a[1]).map(([t, hrs]) => `${t} ${hrs.toFixed(1)}h${isKitchen(t) ? ' (kitchen)' : ''}`);
+  // Orders and tickets are by business date; hours after midnight fall on the next calendar day.
+  const dayOf = (hour) => (hour < 4 ? addDays(date, 1) : date);
+  const kitchenAt = new Map();
+  for (const r of rows) if (isKitchen(r.job_title)) kitchenAt.set(`${r.local_date}|${r.hour}`, (kitchenAt.get(`${r.local_date}|${r.hour}`) || 0) + r.hours);
+  const timedAt = new Map();
+  for (const t of sales?.tickets ?? []) timedAt.set(t.hour, (timedAt.get(t.hour) || 0) + 1);
+  const units = (sales?.hourly ?? []).filter((h) => h.orders >= 3 && (kitchenAt.get(`${dayOf(h.hour)}|${h.hour}`) || 0) >= 0.25 && timedAt.get(h.hour)).length;
+  const kitchenHours = [...kitchenAt.values()].reduce((a, b) => a + b, 0);
+  return [
+    `Job titles on the clock: ${titles.join(', ') || 'none'}`,
+    `Staffing chart: ${kitchenHours.toFixed(1)} kitchen staff hours (${[...kitchen].join(', ')}), ${sales?.tickets?.length ?? 0} timed tickets, ${units} hours with 3+ orders, a cook on the clock and a timed ticket (the chart needs 6 over its 8 weeks).`,
+  ];
 }
 
 async function kitchenProbe(toast, guid, date) {
@@ -277,6 +305,7 @@ async function main() {
       out(`✅ **Labor** for ${date}: ${entries.length} time entries, ${hours.toFixed(1)} hours, $${cost.toFixed(2)} labor cost.`);
       if (entries.length && cost === 0) out('   ⚠️ Hours were found but cost is $0. Wages may not be entered in Toast, so labor % will be empty.');
       if (sales?.daily.net_sales > 0 && cost > 0) out(`   Labor % that day: ${((cost / sales.daily.net_sales) * 100).toFixed(1)}%`);
+      for (const line of staffingLines(entries, sales, date, { timezone: tz, lookups })) out(`   ${line}`);
     } catch (err) {
       out(`⚠️ **Labor**: ${reason(err)}. Enable **Labor** read access to see labor in the dashboard.`);
     }

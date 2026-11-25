@@ -2,7 +2,7 @@
 
 import { fmt, h } from './util.js';
 
-const SECTION_LABELS = { sales: 'Sales', discounts: 'Discounts & comps', labor: 'Labor', items: 'Menu items', sevenshifts: '7shifts' };
+const SECTION_LABELS = { sales: 'Sales', discounts: 'Discounts & comps', labor: 'Labor', items: 'Menu items', kitchen: 'Kitchen', sevenshifts: '7shifts' };
 
 // Result of the Cloudflare Access update from the last save/remove, shown once
 // after the page re-renders.
@@ -77,7 +77,7 @@ export async function adminView(ctx) {
 
 function userForm(ctx, data, u, onSaved, onCancel) {
   const isNew = !u;
-  u = u || { email: '', name: '', role: 'viewer', active: true, allLocations: false, locations: [], sections: { sales: true, discounts: false, labor: false, items: true, sevenshifts: false } };
+  u = u || { email: '', name: '', role: 'viewer', active: true, allLocations: false, locations: [], sections: { sales: true, discounts: false, labor: false, items: true, kitchen: false, sevenshifts: false } };
   const err = h('div', { class: 'error', style: { padding: '8px 0', textAlign: 'left' } });
 
   const email = h('input', { type: 'email', value: u.email, required: true, disabled: !isNew, placeholder: 'name@example.com' });

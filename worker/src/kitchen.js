@@ -183,3 +183,94 @@ export function ticketTrendSql(grain, locationCount) {
     FROM r WHERE rn IN ((n + 1) / 2, (n + 2) / 2)
     GROUP BY g, b`;
 }
+
+// --- By hour: demand, staffing & ticket time -----------------------------------
+// A location gets the chart only if it has timed tickets and at least 6
+// date-hours with 3+ orders, 0.25+ kitchen staff hours and a timed ticket.
+export const STAFFING_GATE = { minOrders: 3, minKitchenHours: 0.25, minUnits: 6 };
+
+/**
+ * Toast job titles that count as kitchen staff (exact, case-insensitive). The
+ * KITCHEN_JOB_TITLES variable (comma-separated) overrides this list.
+ */
+export const DEFAULT_KITCHEN_JOB_TITLES = 'Kitchen,Expo';
+export function kitchenTitleList(env) {
+  return String(env?.KITCHEN_JOB_TITLES || DEFAULT_KITCHEN_JOB_TITLES).split(',').map((t) => t.trim()).filter(Boolean);
+}
+export function kitchenTitles(env) {
+  return new Set(kitchenTitleList(env).map((t) => t.toLowerCase()));
+}
+
+const add = (map, key, v) => map.set(key, (map.get(key) || 0) + v);
+
+/**
+ * Averages per hour of day. orders / kitchen: Map("date|hour" -> orders /
+ * kitchen staff hours); tickets: Map("date|hour" -> [minutes]). An hour's
+ * days are the dates with an order in it; hours averaging < 1 order are left
+ * out. [{ hour, orders (1 dp), kitchenStaff (2 dp), median (1 dp) | null }].
+ */
+export function hourlyRows(orders, kitchen, tickets) {
+  const days = new Map();
+  const ordc = new Map();
+  const kh = new Map();
+  const tks = new Map();
+  for (const [key, n] of orders) {
+    const [d, h] = key.split('|');
+    const hour = Number(h);
+    if (!days.has(hour)) days.set(hour, new Set());
+    days.get(hour).add(d);
+    add(ordc, hour, n);
+  }
+  for (const [key, v] of kitchen) add(kh, Number(key.split('|')[1]), v);
+  for (const [key, v] of tickets) {
+    const hour = Number(key.split('|')[1]);
+    if (!tks.has(hour)) tks.set(hour, []);
+    tks.get(hour).push(...v);
+  }
+  const rows = [];
+  for (const hour of [...days.keys()].sort((a, b) => a - b)) {
+    const nd = days.get(hour).size || 1;
+    const avg = (ordc.get(hour) || 0) / nd;
+    if (avg < 1) continue;
+    const t = tks.get(hour);
+    rows.push({
+      hour,
+      orders: roundHalfEven(avg, 1),
+      kitchenStaff: roundHalfEven((kh.get(hour) || 0) / nd, 2),
+      median: t?.length ? roundHalfEven(median(t), 1) : null,
+    });
+  }
+  return rows;
+}
+
+/**
+ * input: { orders: [{ date, hour, orders }], kitchen: [{ date, hour, hours }],
+ * tickets: [{ date, hour, minutes }] }, dates local. Returns { rows (null when
+ * the gate fails), gate: { timedTickets, kitchenHours, units, passed } }.
+ */
+export function buildHourlyProfile({ orders = [], kitchen = [], tickets = [] }) {
+  const ord = new Map();
+  for (const r of orders) if (Number(r.orders) > 0) add(ord, `${r.date}|${Number(r.hour)}`, Number(r.orders));
+  const kit = new Map();
+  for (const r of kitchen) add(kit, `${r.date}|${Number(r.hour)}`, Number(r.hours) || 0);
+  const tk = new Map();
+  for (const r of tickets) {
+    const key = `${r.date}|${Number(r.hour)}`;
+    if (!tk.has(key)) tk.set(key, []);
+    tk.get(key).push(Number(r.minutes));
+  }
+  const g = STAFFING_GATE;
+  let units = 0;
+  for (const [key, n] of ord) {
+    if (n >= g.minOrders && (kit.get(key) || 0) >= g.minKitchenHours && tk.get(key)?.length) units++;
+  }
+  const gate = {
+    timedTickets: tickets.length,
+    kitchenHours: roundHalfEven([...kit.values()].reduce((a, b) => a + b, 0), 1),
+    units,
+    passed: tickets.length > 0 && units >= g.minUnits,
+  };
+  if (!gate.passed) return { rows: null, gate };
+  const rows = hourlyRows(ord, kit, tk);
+  return { rows: rows.length ? rows : null, gate };
+}

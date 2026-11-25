@@ -46,6 +46,8 @@ async function route(request, env) {
         return json(await api.orderHeatmap(env, url, user));
       case '/api/ticket-trend':
         return json(await api.ticketTrend(env, url, user));
+      case '/api/staffing':
+        return json(await api.staffing(env, url, user));
       case '/api/sevenshifts':
         return json(await api.sevenShifts(env, url, user));
       case '/api/logbook':

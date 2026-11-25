@@ -103,6 +103,19 @@ function ticketsFor(loc, date, hourly) {
   return tickets;
 }
 
+/** Kitchen and cashier hours on the clock by hour: more cooks when it's busy. */
+function staffFor(loc, date) {
+  const dow = parseDate(date).getUTCDay();
+  const rows = [];
+  for (let hour = 10; hour <= 22; hour++) {
+    const load = (HOURS[hour] || 0.02) * DOW[dow];
+    const cooks = Math.round((1.5 + 22 * load * jitter(0.2)) * 4) / 4;
+    rows.push({ local_date: date, hour, job_title: 'Kitchen', hours: cooks });
+    if (hour >= 11 && hour <= 21) rows.push({ local_date: date, hour, job_title: 'Cashier', hours: 1 });
+  }
+  return rows;
+}
+
 function day(loc, date, withTickets = false) {
   const dow = parseDate(date).getUTCDay();
   const gross = loc.base * DOW[dow] * seasonal(date) * growth(date) * jitter(0.12);
@@ -195,6 +208,7 @@ function day(loc, date, withTickets = false) {
       tickets: withTickets && loc.kitchen ? ticketsFor(loc, date, hourly) : [],
     },
     labor,
+    laborHours: withTickets && loc.kitchen ? staffFor(loc, date) : null,
   };
 }
 
@@ -206,13 +220,13 @@ async function main() {
   await sink.write(upsertLocationsSql(LOCATIONS.map((l) => ({ ...l, toastGuid: null, timezone: l.tz }))));
   for (const date of eachDate(start, end)) {
     for (const loc of LOCATIONS) {
-      const { sales, labor } = day(loc, date, date >= ticketsFrom);
-      await sink.write(dayStatements(loc.id, date, sales, labor, { orders: sales.daily.orders, syncedAt: `${end}T12:00:00Z` }));
+      const { sales, labor, laborHours } = day(loc, date, date >= ticketsFrom);
+      await sink.write(dayStatements(loc.id, date, sales, labor, { orders: sales.daily.orders, syncedAt: `${end}T12:00:00Z` }, laborHours));
     }
   }
   // A demo manager who can only see Downtown sales + labor, to try out permissions.
   await sink.write([
-    `INSERT INTO users (email,name,role,all_locations,can_sales,can_discounts,can_labor,can_items) VALUES (${lit('dt.manager@example.com')},${lit('DT Manager (demo)')},'viewer',0,1,1,1,1) ON CONFLICT(email) DO NOTHING;`,
+    `INSERT INTO users (email,name,role,all_locations,can_sales,can_discounts,can_labor,can_items,can_kitchen) VALUES (${lit('dt.manager@example.com')},${lit('DT Manager (demo)')},'viewer',0,1,1,1,1,1) ON CONFLICT(email) DO NOTHING;`,
     `INSERT INTO user_locations (email,location_id) VALUES ('dt.manager@example.com','DT') ON CONFLICT DO NOTHING;`,
   ]);
   console.error(`Wrote demo data ${start} .. ${end} to ${args.out}`);

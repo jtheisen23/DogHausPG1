@@ -9,7 +9,7 @@
 //   revenue), matching Toast's net sales. Tax, tips and service charges are
 //   tracked separately and are not part of net sales.
 
-import { hourIn, weekdayIn } from './dates.js';
+import { hourIn, localParts, weekdayIn } from './dates.js';
 
 const DEFERRED_SELECTION_TYPES = new Set([
   'TOAST_CARD_SELL',
@@ -313,4 +313,51 @@ function roundAll(obj) {
   const out = {};
   for (const [k, v] of Object.entries(obj)) out[k] = typeof v === 'number' ? round2(v) : v;
   return out;
+}
+
+/**
+ * Adds a shift's hours (ms timestamps) to local clock-hour buckets by the
+ * fraction worked: 4:30-6:15pm adds 0.5 to 4pm, 1.0 to 5pm and 0.25 to 6pm.
+ * acc: Map("<local date>|<hour>" -> hours).
+ */
+export function accumulateHours(acc, startMs, endMs, timeZone) {
+  let cur = startMs;
+  while (cur < endMs) {
+    const p = localParts(cur, timeZone);
+    const next = cur - ((p.minute * 60 + p.second) * 1000 + (cur % 1000)) + 3600000; // next local hour
+    const segEnd = Math.min(next, endMs);
+    if (segEnd <= cur) break;
+    const key = `${p.date}|${p.hour}`;
+    acc.set(key, (acc.get(key) || 0) + (segEnd - cur) / 3600000);
+    cur = segEnd;
+  }
+  return acc;
+}
+
+/**
+ * Hours on the clock per local date, hour and job title (Kitchen tab
+ * staffing): [{ local_date, hour, job_title, hours }]. Deleted entries and
+ * shifts without a clock-out yet are skipped.
+ */
+export function laborHoursByHour(entries, ctx = {}) {
+  const tz = ctx.timezone || 'America/New_York';
+  const jobs = ctx.lookups?.jobs;
+  const byJob = new Map();
+  for (const e of entries ?? []) {
+    if (!e || e.deleted) continue;
+    const start = parseTime(e.inDate);
+    const end = parseTime(e.outDate);
+    if (start === null || end === null || end <= start) continue;
+    const title = (e.jobReference?.guid && jobs?.get(e.jobReference.guid)) || 'Unassigned';
+    if (!byJob.has(title)) byJob.set(title, new Map());
+    accumulateHours(byJob.get(title), start, end, tz);
+  }
+  const rows = [];
+  for (const [title, acc] of byJob) {
+    for (const [key, hours] of acc) {
+      const [date, hour] = key.split('|');
+      rows.push({ local_date: date, hour: Number(hour), job_title: title, hours: Math.round(hours * 10000) / 10000 });
+    }
+  }
+  return rows.sort((a, b) => a.local_date.localeCompare(b.local_date) || a.hour - b.hour || a.job_title.localeCompare(b.job_title));
 }
