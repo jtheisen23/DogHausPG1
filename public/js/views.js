@@ -1385,11 +1385,11 @@ function ordersHeatmapCard(ctx, d) {
 
 /** Ticket-time card for one location, or a note saying why there isn't one. */
 function ticketSection(ctx, ids, data) {
-  // Ticket times are per location: the card only shows with one location selected.
+  // The heatmap is per location: it only shows with one location selected.
   if (ids.length !== 1) {
     return h('div', { class: 'notice' },
-      h('b', {}, 'Ticket times: pick one location. '),
-      'They are shown for one location at a time: Alt/⌘-click a location above to show only that one.');
+      h('b', {}, 'Ticket time by day & hour: pick one location. '),
+      'It is shown for one location at a time: Alt/⌘-click a location above to show only that one.');
   }
   const heat = ticketHeatmapCard(data);
   if (heat) return heat;
@@ -1402,11 +1402,109 @@ function ticketSection(ctx, ids, data) {
       : `None of its ${fmt.int(data.orders)} orders in ${range} had an item marked ready on the kitchen display. Ticket times only exist where the kitchen bumps tickets on the Toast KDS.`);
 }
 
+// Ticket time trend: follows the date range, comparison and grouping like
+// the Overview trend. A point needs at least 3 tickets (as heatmap cells do).
+const MIN_TREND_TICKETS = 3;
+const TICKET_METRICS = {
+  median: { label: 'Median ticket time', calc: (s) => s.median, fmt: (v) => (v == null ? '—' : `${fmt.dec1(v)} min`), axis: (v) => `${v} min`, rate: true },
+  over: { label: 'Tickets over 20 min', calc: (s) => s.over / s.n, fmt: fmt.pct, rate: true },
+  n: { label: 'Tickets timed', calc: (s) => s.n, fmt: fmt.int },
+};
+const ticketTrendState = { metric: 'median', split: 'total' };
+
+/** { el, draw } for the "Ticket time trend" card. */
+function ticketTrendCard(ctx, data) {
+  const grain = data.grain;
+  const { current, compare } = ctx.q;
+  const stats = (rows) => new Map((rows || []).map((r) => [`${r.location_id}|${r.bucket}`, r]));
+  const cur = stats(data.current);
+  const cmp = compare ? stats(data.compare) : null;
+
+  let keys;
+  let ckeys = null;
+  let categories;
+  if (grain === 'hour') {
+    // A business day runs past midnight: order hours from 4am.
+    const pos = (x) => (Number(x) + 24 - DAY_START_HOUR) % 24;
+    const seen = [...(data.current || []), ...(cmp ? data.compare || [] : [])].map((r) => pos(r.bucket));
+    keys = [];
+    if (seen.length) for (let i = Math.min(...seen); i <= Math.max(...seen); i++) keys.push((i + DAY_START_HOUR) % 24);
+    ckeys = cmp ? keys : null;
+    categories = keys.map(hourLabel);
+  } else {
+    keys = bucketsFor(current, grain);
+    ckeys = cmp ? bucketsFor(compare, grain) : null;
+    categories = keys.map((k) => bucketLabel(k, grain));
+  }
+  const cmpLabel = (i) => (grain === 'hour'
+    ? (compare.start === compare.end ? bucketLabel(compare.start, 'day') : fmtRange(compare))
+    : (ckeys[i] ? bucketLabel(ckeys[i], grain) : ''));
+
+  const hasData = (data.current || []).length || (cmp && (data.compare || []).length);
+  const since = data.since && current.start < data.since
+    ? ` · ticket times start ${fmtDate(data.since)}`
+    : '';
+  const chartEl = chartBox(true);
+  const sub = h('span', {}, `${subtitle(ctx)} · by ${grain}${since}`);
+  if (!ticketTrendState.metric || !TICKET_METRICS[ticketTrendState.metric]) ticketTrendState.metric = 'median';
+  const draw = () => {
+    chartEl.replaceChildren();
+    window.echarts.getInstanceByDom(chartEl)?.dispose();
+    if (!hasData) {
+      chartEl.append(h('div', { class: 'empty' }, !data.since
+        ? 'No ticket times yet for these locations. They exist only where the kitchen bumps tickets on the Toast KDS.'
+        : current.end < data.since
+          ? `No ticket times in this period. They start ${fmtDate(data.since)}.`
+          : 'No ticket times in this period.'));
+      return;
+    }
+    const m = TICKET_METRICS[ticketTrendState.metric];
+    const value = (map, g, k) => {
+      const s = k == null ? null : map.get(`${g}|${k}`);
+      if (!s) return null;
+      if (m !== TICKET_METRICS.n && s.n < MIN_TREND_TICKETS) return null;
+      return m.calc(s);
+    };
+    let series;
+    if (ticketTrendState.split === 'location') {
+      series = ctx.q.locations.map((id) => ({
+        name: ctx.loc(id).name,
+        colorIndex: ctx.loc(id).colorIndex,
+        data: keys.map((k) => value(cur, id, k)),
+      }));
+    } else {
+      series = [{ name: 'Current', colorIndex: 0, data: keys.map((k) => value(cur, '_all', k)) }];
+      if (cmp) {
+        series.push({
+          name: 'Comparison',
+          color: 'compare',
+          dashed: true,
+          labels: keys.map((_, i) => cmpLabel(i)),
+          data: keys.map((_, i) => value(cmp, '_all', ckeys[i])),
+        });
+      }
+    }
+    lineChart(chartEl, { categories, series, format: m.fmt, axisFormat: m.axis || m.fmt, area: ticketTrendState.split === 'total' && !m.rate, zeroBased: !m.rate });
+  };
+  const metricSelect = h('select', { 'aria-label': 'Metric', onchange: (e) => { ticketTrendState.metric = e.target.value; draw(); } },
+    Object.entries(TICKET_METRICS).map(([k, m]) => h('option', { value: k, selected: k === ticketTrendState.metric }, m.label)));
+  const splitSeg = seg([['total', 'Total vs comparison'], ['location', 'By location']], ticketTrendState.split, (v) => { ticketTrendState.split = v; draw(); });
+  const el = card('Ticket time trend', sub, [metricSelect, splitSeg], chartEl);
+  el.id = 'ticket-trend-card';
+  return { el, draw };
+}
+
 export async function kitchen(ctx) {
   const ids = ctx.q.locations;
-  const [tickets, orders] = await Promise.all([
+  // One day selected: the trend runs across that day's hours.
+  const oneDay = ctx.q.current.start === ctx.q.current.end;
+  const [trend, tickets, orders] = await Promise.all([
+    ctx.api('/api/ticket-trend', { grain: oneDay ? 'hour' : trendGrain(ctx.q) }),
     ids.length === 1 ? ctx.api('/api/kitchen', { locations: ids[0] }) : null,
     ctx.api('/api/order-heatmap'),
   ]);
-  return h('div', { class: 'kitchen' }, ticketSection(ctx, ids, tickets), ordersHeatmapCard(ctx, orders));
+  const trendCard = ticketTrendCard(ctx, trend);
+  const node = h('div', { class: 'kitchen' }, trendCard.el, ticketSection(ctx, ids, tickets), ordersHeatmapCard(ctx, orders));
+  later(trendCard.draw);
+  return node;
 }

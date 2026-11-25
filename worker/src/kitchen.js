@@ -145,3 +145,41 @@ export function ordersHeatmapPayload(byLoc, present) {
   const max = Math.max(0, ...values) || 1;
   return { locations, byLoc: Object.fromEntries(locations.map((id) => [id, byLoc[id]])), max };
 }
+
+// --- Ticket time trend -------------------------------------------------------
+// Medians can't be added up across days, so each point is computed in SQL from
+// the ticket rows of its bucket. Buckets match the dashboard's (weeks start on
+// Monday, months on the 1st; 'hour' is used when a single day is selected).
+const TICKET_BUCKETS = {
+  hour: 'hour',
+  day: 'business_date',
+  week: "date(business_date, '-' || ((CAST(strftime('%w', business_date) AS INTEGER) + 6) % 7) || ' days')",
+  month: "substr(business_date, 1, 7) || '-01'",
+};
+export const TICKET_GRAINS = Object.keys(TICKET_BUCKETS);
+
+/**
+ * SQL for ticket-time stats per (location, bucket), plus '_all' (every
+ * selected location pooled) per bucket: n tickets, `over` = tickets over 20
+ * min, and the median minutes. Binds: start, end, then each location id.
+ */
+export function ticketTrendSql(grain, locationCount) {
+  const bucket = TICKET_BUCKETS[grain];
+  if (!bucket) throw new Error(`Unknown grain ${grain}`);
+  const inList = Array.from({ length: locationCount }, () => '?').join(',');
+  return `WITH t AS (
+      SELECT location_id AS g, ${bucket} AS b, minutes FROM ticket_times
+      WHERE business_date BETWEEN ? AND ? AND location_id IN (${inList})
+    ),
+    u AS (SELECT g, b, minutes FROM t UNION ALL SELECT '_all', b, minutes FROM t),
+    r AS (
+      SELECT g, b, minutes,
+        ROW_NUMBER() OVER (PARTITION BY g, b ORDER BY minutes) AS rn,
+        COUNT(*) OVER (PARTITION BY g, b) AS n,
+        SUM(minutes > 20) OVER (PARTITION BY g, b) AS over
+      FROM u
+    )
+    SELECT g AS location_id, b AS bucket, n, over, AVG(minutes) AS median
+    FROM r WHERE rn IN ((n + 1) / 2, (n + 2) / 2)
+    GROUP BY g, b`;
+}
