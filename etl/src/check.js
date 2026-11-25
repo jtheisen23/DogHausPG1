@@ -78,6 +78,32 @@ function ordersWithoutRevenueCenter(orders, ctx) {
  * informational: it reports what comes back so the data can be mapped before
  * the sync stores any of it. Names of people are masked; the log may be public.
  */
+/**
+ * Ticket times (Kitchen tab): how many orders had an item bumped to READY on
+ * the KDS, and the item fulfillment statuses seen. 0 timed orders means the
+ * kitchen doesn't bump on the KDS and the Kitchen card stays hidden.
+ */
+function ticketTimeLine(orders, sales) {
+  const statuses = new Map();
+  for (const o of orders) {
+    if (!o || o.deleted || o.voided) continue;
+    for (const c of o.checks ?? []) {
+      if (!c || c.deleted || c.voided) continue;
+      for (const s of c.selections ?? []) {
+        if (!s || s.voided || s.deleted) continue;
+        const k = s.fulfillmentStatus || 'none';
+        statuses.set(k, (statuses.get(k) || 0) + 1);
+      }
+    }
+  }
+  const mins = sales.tickets.map((t) => t.minutes).sort((a, b) => a - b);
+  const median = mins.length ? (mins.length % 2 ? mins[(mins.length - 1) / 2] : (mins[mins.length / 2 - 1] + mins[mins.length / 2]) / 2) : null;
+  const seen = [...statuses].sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`).join(', ') || 'no items';
+  return mins.length
+    ? `Ticket times: ${mins.length} of ${sales.daily.orders} orders have an item bumped to READY (median ${median.toFixed(1)} min). Item statuses: ${seen}.`
+    : `⚠️ Ticket times: 0 of ${sales.daily.orders} orders have an item bumped to READY, so the Kitchen card stays hidden for this location. Item statuses: ${seen}.`;
+}
+
 async function kitchenProbe(toast, guid, date) {
   const path = '/kitchen/v1/export/itemFulfillments';
   // Raw requests, so an empty or non-JSON reply is reported as it is.
@@ -236,6 +262,7 @@ async function main() {
       const rcs = sales.mix.filter((m) => m.dimension === 'revenue_center').map((m) => `${m.label} $${m.net_sales.toFixed(0)} (${m.orders})`);
       if (rcs.length) out(`   Revenue centers: ${rcs.join(', ')}`);
       for (const line of ordersWithoutRevenueCenter(orders, { timezone: tz, lookups })) out(`   ${line}`);
+      out(`   ${ticketTimeLine(orders, sales)}`);
       if (!orders.length) out("   ⚠️ No orders that day. That's expected if the location was closed; otherwise check the GUID.");
     } catch (err) {
       ok = false;

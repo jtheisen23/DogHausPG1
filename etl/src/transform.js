@@ -9,7 +9,7 @@
 //   revenue), matching Toast's net sales. Tax, tips and service charges are
 //   tracked separately and are not part of net sales.
 
-import { hourIn } from './dates.js';
+import { hourIn, weekdayIn } from './dates.js';
 
 const DEFERRED_SELECTION_TYPES = new Set([
   'TOAST_CARD_SELL',
@@ -42,6 +42,39 @@ function selectionGross(sel) {
  * @param {object[]} orders  Toast Order objects for a single business date
  * @param {object}   ctx     { timezone, lookups: { diningOptions, revenueCenters, salesCategories, employees } }
  */
+const parseTime = (v) => {
+  if (!v) return null;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? t : null;
+};
+
+/**
+ * Whole-ticket kitchen time in minutes: earliest item fired (createdDate) to
+ * latest item marked READY (its modifiedDate is the KDS bump). Voided and
+ * deleted items (and voided checks) are ignored. null when no item on the ticket was bumped to READY, or the
+ * span is outside 0-240 minutes. Items only reach READY where the kitchen
+ * bumps tickets on the Toast KDS.
+ */
+export function ticketReadyMinutes(checks) {
+  let fired = null;
+  let ready = null;
+  for (const check of checks ?? []) {
+    if (!check || check.deleted || check.voided) continue;
+    for (const sel of check.selections ?? []) {
+      if (!sel || sel.voided || sel.deleted) continue;
+      const created = parseTime(sel.createdDate);
+      if (created !== null && (fired === null || created < fired)) fired = created;
+      if (sel.fulfillmentStatus === 'READY') {
+        const modified = parseTime(sel.modifiedDate);
+        if (modified !== null && (ready === null || modified > ready)) ready = modified;
+      }
+    }
+  }
+  if (fired === null || ready === null) return null;
+  const mins = (ready - fired) / 60000;
+  return mins >= 0 && mins < 240 ? Math.round(mins * 100) / 100 : null;
+}
+
 export function aggregateOrders(orders, ctx) {
   const tz = ctx.timezone || 'America/New_York';
   const lk = ctx.lookups || {};
@@ -76,6 +109,7 @@ export function aggregateOrders(orders, ctx) {
     tips: 0,
   };
   const hourly = new Map();
+  const tickets = [];
   const mix = new Map();
   const items = new Map();
   const discounts = new Map();
@@ -196,7 +230,13 @@ export function aggregateOrders(orders, ctx) {
     daily.discounts += orderDisc;
     daily.net_sales += orderNet;
 
-    const hour = hourIn(order.openedDate || order.createdDate, tz);
+    const opened = order.openedDate || order.createdDate;
+    const hour = hourIn(opened, tz);
+    const ticketMinutes = ticketReadyMinutes(order.checks);
+    const weekday = weekdayIn(opened, tz);
+    if (ticketMinutes !== null && hour !== null && weekday !== null) {
+      tickets.push({ order_guid: order.guid || `order-${tickets.length}`, weekday, hour, minutes: ticketMinutes });
+    }
     if (hour !== null) {
       const h = bump(hourly, hour, () => ({ hour, orders: 0, guests: 0, net_sales: 0 }));
       h.orders += 1;
@@ -216,6 +256,8 @@ export function aggregateOrders(orders, ctx) {
     mix: [...mix.values()].map(roundAll),
     items: [...items.values()].map(roundAll),
     discounts: [...discounts.values()].map(roundAll).filter((d) => d.amount !== 0 || d.uses > 0),
+    // One row per order with a KDS ticket time (opened in local weekday/hour).
+    tickets,
   };
 }
 

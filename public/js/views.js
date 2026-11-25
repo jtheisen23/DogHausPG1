@@ -1289,3 +1289,69 @@ async function logBookCard(ctx) {
   return card('Log book', `${fmtRange(ctx.q.current)} · from 7shifts`, [filesLabel, catSelect, search, status],
     h('div', { style: { margin: '0 0 12px' } }, chipRow), body);
 }
+
+// ---------------------------------------------------------------------------
+// Kitchen
+// ---------------------------------------------------------------------------
+const HEAT_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const HEAT_LEGEND = [['≤10', '#bfe3c6'], ['11–14', '#e9edb0'], ['15–18', '#f5d59b'], ['19–22', '#f2b48a'], ['22+', '#eb9c9c']];
+const heatColor = (v) => (v == null ? 'transparent'
+  : v <= 10 ? '#bfe3c6' : v <= 14 ? '#e9edb0' : v <= 18 ? '#f5d59b' : v <= 22 ? '#f2b48a' : '#eb9c9c');
+const heatHour = (x) => `${x % 12 || 12}${x < 12 ? 'a' : 'p'}`;
+
+/**
+ * "Ticket time by day & hour" card, matching the other brand's dashboard:
+ * median minutes per local weekday x hour, blank under 3 tickets. Returns
+ * null when there is no heatmap (the card is then not shown).
+ */
+function ticketHeatmapCard(data) {
+  const d = data?.heatmap;
+  if (!d || !d.hours || !d.hours.length) return null;
+  const head = h('thead', {}, h('tr', {}, h('th', {}, 'Day'), d.hours.map((x) => h('th', {}, heatHour(x)))));
+  const body = h('tbody', {}, HEAT_DAYS.map((day, wd) => h('tr', {},
+    h('td', {}, day),
+    d.hours.map((x) => {
+      const c = d.cells[`${wd}-${x}`];
+      return c
+        ? h('td', {
+          class: 'cell',
+          style: { background: heatColor(c.median) },
+          title: `${day} ${heatHour(x)} · median ${c.median}m · ${c.over}% over 20 min · ${c.n} tickets`,
+        }, String(Math.round(c.median)))
+        : h('td', { class: 'cell empty' });
+    }))));
+  const legend = h('div', { class: 'legend', id: 'heat-legend' },
+    HEAT_LEGEND.map(([label, color]) => h('span', {}, h('span', { class: 'swatch', style: { background: color } }), `${label} min`)));
+  const pct = data.orders ? ` (${Math.round((100 * data.timed) / data.orders)}%)` : '';
+  const footnote = h('div', { class: 'small muted heat-note' },
+    `${fmtRange(data.window)} · ${fmt.int(data.timed)} of ${fmt.int(data.orders)} orders timed${pct}`);
+  const el = card(
+    ['Ticket time by day & hour ', h('span', { class: 'muted', style: { fontWeight: '400' } }, '(estimated)')],
+    'Median minutes from first item fired to last item ready, by weekday and hour (last 8 weeks). Redder = slower; blank = too few tickets.',
+    null,
+    h('div', { class: 'table-wrap' }, h('table', { id: 'heatTable' }, head, body)),
+    legend,
+  );
+  el.id = 'ticket-heatmap-card';
+  return h('div', {}, el, footnote);
+}
+
+export async function kitchen(ctx) {
+  const ids = ctx.q.locations;
+  // Ticket times are per location: the card only shows with one location selected.
+  if (ids.length !== 1) {
+    return h('div', { class: 'notice' },
+      h('b', {}, 'Pick one location. '),
+      'Ticket times are shown for one location at a time: Alt/⌘-click a location above to show only that one.');
+  }
+  const data = await ctx.api('/api/kitchen', { locations: ids[0] });
+  const heat = ticketHeatmapCard(data);
+  if (heat) return heat;
+  const name = ctx.loc(ids[0]).name;
+  const range = data.window ? fmtRange(data.window) : 'the last 8 weeks';
+  return h('div', { class: 'notice' },
+    h('b', {}, `No ticket times for ${name}. `),
+    data.timed
+      ? `Only ${fmt.int(data.timed)} of its ${fmt.int(data.orders)} orders in ${range} were timed, too few for any hour.`
+      : `None of its ${fmt.int(data.orders)} orders in ${range} had an item marked ready on the kitchen display. Ticket times only exist where the kitchen bumps tickets on the Toast KDS.`);
+}
