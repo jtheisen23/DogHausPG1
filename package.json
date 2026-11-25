@@ -11,7 +11,7 @@
     "db:migrate:remote": "wrangler d1 migrations apply doghaus-pg1 --remote",
     "demo:seed": "node etl/src/demo.js --out .tmp/demo.sql && wrangler d1 execute doghaus-pg1 --local --file .tmp/demo.sql",
     "sync": "node etl/src/index.js",
-    "test": "node --test etl/test/*.test.js worker/test/*.test.js"
+    "test": "node --test etl/test/*.test.js worker/test/*.test.js test/*.test.js"
   },
   "devDependencies": {
     "echarts": "6.1.0",

@@ -132,7 +132,7 @@ export const PRESETS = [
 export const COMPARES = [
   ['yoy364', 'Same period last year (by weekday)'],
   ['yoy', 'Same dates last year'],
-  ['prev', 'Previous period'],
+  ['prev', 'Prior week (same weekdays)'],
   ['custom', 'Custom range…'],
   ['none', 'No comparison'],
 ];
@@ -175,7 +175,12 @@ export function compareRange(mode, cur) {
   if (!cur) return null;
   const len = daysBetween(cur.start, cur.end);
   switch (mode) {
-    case 'prev': { const end = addDays(cur.start, -1); return { start: addDays(end, -len), end }; }
+    case 'prev': {
+      // The prior week on the same weekdays (Mon vs last Mon). Ranges longer
+      // than a week go back just enough whole weeks not to overlap themselves.
+      const shift = Math.ceil((len + 1) / 7) * 7;
+      return { start: addDays(cur.start, -shift), end: addDays(cur.end, -shift) };
+    }
     case 'yoy364': return { start: addDays(cur.start, -364), end: addDays(cur.end, -364) };
     case 'yoy': return { start: addYears(cur.start, -1), end: addYears(cur.end, -1) };
     default: return null;
