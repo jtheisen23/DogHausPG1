@@ -4,7 +4,7 @@
 
 import { barChart, lineChart } from './charts.js';
 import {
-  bucketLabel, bucketize, bucketsFor, change, dataTable, deltaNode, div, eachDate, fmt, fmtDate, fmtRange, fmtWeekday, h,
+  bucketLabel, bucketize, bucketsFor, change, dataTable, daysBetween, deltaNode, div, eachDate, fmt, fmtDate, fmtRange, fmtWeekday, h,
   ICON_DOWN, ICON_UP, sumBy, svgIcon, toDate, totals, WEEKDAYS,
 } from './util.js';
 
@@ -152,6 +152,59 @@ function trendSeries(ctx, rowsCur, rowsCmp, m, byLocation) {
   return { categories, series };
 }
 
+// Metrics that exist per hour (hourly_sales has sales, orders and guests only).
+const HOURLY_METRICS = new Set(['net_sales', 'orders', 'guests', 'avg_check']);
+const HOUR_FIELDS = ['net_sales', 'orders', 'guests'];
+const hourLabel = (x) => `${x % 12 || 12}${x < 12 ? 'a' : 'p'}`;
+// A business day runs past midnight, so order hours from 4am: 4a ... 11p, 12a ... 3a.
+const DAY_START_HOUR = 4;
+
+/**
+ * One day selected: the trend runs across that day's hours instead of across
+ * days. A comparison spanning several days is averaged per day.
+ */
+function hourlyTrend(ctx, hourly, m, byLocation) {
+  const cur = hourly.current || [];
+  const cmp = ctx.q.compare ? hourly.compare || [] : null;
+  const pos = (x) => (Number(x) + 24 - DAY_START_HOUR) % 24;
+  const seen = [...cur, ...(cmp || [])].map((r) => pos(r.label));
+  if (!seen.length) return null;
+  const hours = [];
+  for (let i = Math.min(...seen); i <= Math.max(...seen); i++) hours.push((i + DAY_START_HOUR) % 24);
+  const categories = hours.map(hourLabel);
+  const value = (t) => (t ? m.calc(t) : m.rate ? null : 0);
+
+  if (byLocation) {
+    const by = sumBy(cur, (r) => `${r.location_id}|${Number(r.label)}`, HOUR_FIELDS);
+    return {
+      categories,
+      series: ctx.q.locations.map((id) => ({
+        name: ctx.loc(id).name,
+        colorIndex: ctx.loc(id).colorIndex,
+        data: hours.map((x) => value(by.get(`${id}|${x}`))),
+      })),
+    };
+  }
+  const curBy = sumBy(cur, (r) => Number(r.label), HOUR_FIELDS);
+  const series = [{ name: 'Current', colorIndex: 0, data: hours.map((x) => value(curBy.get(x))) }];
+  if (cmp) {
+    const days = daysBetween(ctx.q.compare.start, ctx.q.compare.end) + 1;
+    const cmpBy = sumBy(cmp, (r) => Number(r.label), HOUR_FIELDS);
+    const label = days === 1 ? bucketLabel(ctx.q.compare.start, 'day') : `avg per day, ${fmtRange(ctx.q.compare)}`;
+    series.push({
+      name: 'Comparison',
+      color: 'compare',
+      dashed: true,
+      labels: hours.map(() => label),
+      data: hours.map((x) => {
+        const t = cmpBy.get(x);
+        return value(t && Object.fromEntries(HOUR_FIELDS.map((f) => [f, t[f] / days])));
+      }),
+    });
+  }
+  return { categories, series };
+}
+
 function subtitle(ctx) {
   return ctx.q.compare ? `${fmtRange(ctx.q.current)} vs ${fmtRange(ctx.q.compare)}` : fmtRange(ctx.q.current);
 }
@@ -162,7 +215,12 @@ function subtitle(ctx) {
 const overviewState = { metric: 'net_sales', split: 'total' };
 
 export async function overview(ctx) {
-  const data = await ctx.api('/api/overview');
+  // With one day selected, the trend is drawn across that day's hours.
+  const oneDay = ctx.q.current.start === ctx.q.current.end;
+  const [data, hourly] = await Promise.all([
+    ctx.api('/api/overview'),
+    oneDay ? ctx.api('/api/mix', { dimension: 'hour' }).catch(() => null) : null,
+  ]);
   const hasCmp = !!ctx.q.compare;
   const { user } = ctx;
   const T = totals(data.totals.current, SALES_FIELDS);
@@ -191,11 +249,16 @@ export async function overview(ctx) {
   const rowsCur = mergeDaily(data.daily.current, data.laborDaily?.current);
   const rowsCmp = hasCmp ? mergeDaily(data.daily.compare, data.laborDaily?.compare) : null;
   const chartEl = chartBox(true);
+  const trendSub = h('span');
   const draw = () => {
     chartEl.replaceChildren();
     window.echarts.getInstanceByDom(chartEl)?.dispose();
     const m = METRICS[overviewState.metric];
-    const { categories, series } = trendSeries(ctx, rowsCur, rowsCmp, m, overviewState.split === 'location');
+    const byHour = oneDay && hourly && HOURLY_METRICS.has(overviewState.metric)
+      ? hourlyTrend(ctx, hourly, m, overviewState.split === 'location')
+      : null;
+    trendSub.textContent = `${subtitle(ctx)} · by ${byHour ? 'hour' : ctx.q.grain}`;
+    const { categories, series } = byHour || trendSeries(ctx, rowsCur, rowsCmp, m, overviewState.split === 'location');
     lineChart(chartEl, { categories, series, format: m.fmt, axisFormat: m.axis || m.fmt, area: overviewState.split === 'total' && !m.rate, zeroBased: !m.rate });
   };
   if (!METRICS[overviewState.metric] || (METRICS[overviewState.metric].needs && !user.sections[METRICS[overviewState.metric].needs])) {
@@ -210,7 +273,7 @@ export async function overview(ctx) {
 
   const node = h('div', {},
     h('div', { class: 'grid kpis' }, tiles),
-    card('Trend', `${subtitle(ctx)} · by ${ctx.q.grain}`, [metricSelect, splitSeg], chartEl),
+    card('Trend', trendSub, [metricSelect, splitSeg], chartEl),
     card('Locations', subtitle(ctx), csvButton(() => table), table.el),
   );
   later(draw);
