@@ -41,6 +41,7 @@ export function upsertLocationsSql(locations) {
 
 const TABLES = ['daily_sales', 'hourly_sales', 'sales_mix', 'item_sales', 'discount_sales', 'ticket_times', 'labor_daily'];
 const TICKET_COLUMNS = ['location_id', 'business_date', 'order_guid', 'weekday', 'hour', 'minutes'];
+const LABOR_HOURS_COLUMNS = ['location_id', 'business_date', 'local_date', 'hour', 'job_title', 'hours'];
 const MIX_COLUMNS = [
   'location_id', 'business_date', 'dimension', 'label', 'orders', 'quantity', 'gross_sales',
   'discounts', 'net_sales',
@@ -58,15 +59,26 @@ export function mixStatements(locationId, date, sales, dimension) {
   ];
 }
 
+/** Replaces a location-day's hours on the clock by local hour and job (labor_hours). */
+export function laborHoursStatements(locationId, date, rows) {
+  const key = { location_id: locationId, business_date: date };
+  return [
+    `DELETE FROM labor_hours WHERE location_id=${lit(locationId)} AND business_date=${lit(date)};`,
+    ...insert('labor_hours', rows.map((r) => ({ ...key, ...r })), LABOR_HOURS_COLUMNS),
+  ];
+}
+
 /**
- * Replaces a location-day's ticket times and leaves every other table alone:
- * loads KDS ticket times for days synced before they were collected.
+ * Replaces a location-day's Kitchen tab data (KDS ticket times and, when
+ * given, hours on the clock by hour) and leaves every other table alone: loads
+ * it for days synced before it was collected.
  */
-export function ticketStatements(locationId, date, sales) {
+export function kitchenStatements(locationId, date, sales, laborHours = null) {
   const key = { location_id: locationId, business_date: date };
   return [
     `DELETE FROM ticket_times WHERE location_id=${lit(locationId)} AND business_date=${lit(date)};`,
     ...insert('ticket_times', (sales.tickets ?? []).map((r) => ({ ...key, ...r })), TICKET_COLUMNS),
+    ...(laborHours ? laborHoursStatements(locationId, date, laborHours) : []),
   ];
 }
 
@@ -79,10 +91,10 @@ export function ticketStatements(locationId, date, sales) {
 /** Removes a location's rows dated before its startDate (pre-opening test orders, training labor). */
 export function purgeBeforeStatements(locationId, startDate) {
   const where = `WHERE location_id=${lit(locationId)} AND business_date < ${lit(startDate)}`;
-  return [...TABLES, 'scheduled_labor', 'log_book_posts', 'sync_log'].map((t) => `DELETE FROM ${t} ${where};`);
+  return [...TABLES, 'labor_hours', 'scheduled_labor', 'log_book_posts', 'sync_log'].map((t) => `DELETE FROM ${t} ${where};`);
 }
 
-export function dayStatements(locationId, date, sales, labor, meta = {}) {
+export function dayStatements(locationId, date, sales, labor, meta = {}, laborHours = null) {
   const key = { location_id: locationId, business_date: date };
   const where = `WHERE location_id=${lit(locationId)} AND business_date=${lit(date)}`;
   const stmts = [];
@@ -117,6 +129,7 @@ export function dayStatements(locationId, date, sales, labor, meta = {}) {
       ]),
     );
   }
+  if (laborHours) stmts.push(...laborHoursStatements(locationId, date, laborHours));
   stmts.push(
     `INSERT INTO sync_log (location_id,business_date,synced_at,orders,time_entries) VALUES (${[
       locationId,

@@ -8,8 +8,9 @@
 //   node etl/src/index.js --backfill --from 2025-01-01 --max-rows 1000000  # history load
 //   node etl/src/index.js --start 2026-02-01 --end 2026-10-10 --revenue-centers-only
 //                                   # rewrite only revenue center sales (after a mapping fix)
-//   node etl/src/index.js --start 2025-11-25 --end 2026-09-27 --tickets-only
-//                                   # load only KDS ticket times (Kitchen tab) for past days
+//   node etl/src/index.js --start 2026-09-28 --kitchen-only
+//                                   # load only Kitchen tab data (KDS ticket times, staff
+//                                   # hours by hour) for past days
 //
 // Environment: TOAST_CLIENT_ID, TOAST_CLIENT_SECRET, [TOAST_API_HOST],
 //   CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, D1_DATABASE_ID,
@@ -19,8 +20,8 @@ import { parseArgs } from 'node:util';
 import { addDays, eachDate, parseDate, todayIn, toToastDate } from './dates.js';
 import { loadLocations } from './config.js';
 import { ToastClient } from './toast.js';
-import { aggregateLabor, aggregateOrders } from './transform.js';
-import { dayStatements, mixStatements, purgeBeforeStatements, ticketStatements, upsertLocationsSql } from './sql.js';
+import { aggregateLabor, aggregateOrders, laborHoursByHour } from './transform.js';
+import { dayStatements, kitchenStatements, mixStatements, purgeBeforeStatements, upsertLocationsSql } from './sql.js';
 import { D1Sink, FileSink } from './sink.js';
 
 const { values: args } = parseArgs({
@@ -32,7 +33,7 @@ const { values: args } = parseArgs({
     out: { type: 'string' },
     'skip-labor': { type: 'boolean', default: false },
     'revenue-centers-only': { type: 'boolean', default: false },
-    'tickets-only': { type: 'boolean', default: false },
+    'kitchen-only': { type: 'boolean', default: false },
     backfill: { type: 'boolean', default: false },
     from: { type: 'string', default: '2025-01-01' },
     'max-rows': { type: 'string', default: '1000000' },
@@ -45,8 +46,8 @@ const log = (...a) => console.error(new Date().toISOString(), ...a);
 async function main() {
   // Backfill progress comes from sync_log, which a revenue-centers-only run doesn't update.
   if (args.backfill && args['revenue-centers-only']) throw new Error('--revenue-centers-only needs --start/--days, not --backfill');
-  if (args.backfill && args['tickets-only']) throw new Error('--tickets-only needs --start/--days, not --backfill');
-  if (args['revenue-centers-only'] && args['tickets-only']) throw new Error('Use --revenue-centers-only or --tickets-only, not both');
+  if (args.backfill && args['kitchen-only']) throw new Error('--kitchen-only needs --start/--days, not --backfill');
+  if (args['revenue-centers-only'] && args['kitchen-only']) throw new Error('Use --revenue-centers-only or --kitchen-only, not both');
   let locations = loadLocations(args.config);
   if (args.locations) {
     const want = new Set(args.locations.split(',').map((s) => s.trim().toUpperCase()));
@@ -89,22 +90,26 @@ async function main() {
       log(`  ${loc.id} ${date}: ${orders.length} orders, revenue centers rewritten`);
       return;
     }
-    if (args['tickets-only']) {
-      await sink.write(ticketStatements(loc.id, date, sales));
-      log(`  ${loc.id} ${date}: ${sales.tickets.length}/${sales.daily.orders} orders with a KDS ticket time (ticket times only)`);
+    // Time entries give labor $ (unless 7shifts provides it: --skip-labor) and
+    // hours on the clock by hour and job for the Kitchen tab's staffing chart.
+    let entries = [];
+    let laborHours = null;
+    try {
+      entries = await toast.timeEntriesForBusinessDate(loc.toastGuid, toastDate);
+      laborHours = laborHoursByHour(entries, { timezone: tz, lookups });
+    } catch (err) {
+      if (!args['skip-labor']) throw err;
+      log(`  ${loc.id} ${date}: time entries unavailable (${err.message}); staff hours by hour left as they were`);
+    }
+    if (args['kitchen-only']) {
+      await sink.write(kitchenStatements(loc.id, date, sales, laborHours));
+      log(`  ${loc.id} ${date}: ${sales.tickets.length}/${sales.daily.orders} orders with a KDS ticket time, ${entries.length} time entries (Kitchen data only)`);
       return;
     }
-    let entries = [];
-    let labor = null;
-    if (!args['skip-labor']) {
-      entries = await toast.timeEntriesForBusinessDate(loc.toastGuid, toastDate);
-      labor = aggregateLabor(entries, {
-        lookups,
-        overtimeMultiplier,
-        salariedLaborPerDay: loc.salariedLaborPerDay,
-      });
-    }
-    await sink.write(dayStatements(loc.id, date, sales, labor, { orders: orders.length, timeEntries: entries.length }));
+    const labor = args['skip-labor']
+      ? null
+      : aggregateLabor(entries, { lookups, overtimeMultiplier, salariedLaborPerDay: loc.salariedLaborPerDay });
+    await sink.write(dayStatements(loc.id, date, sales, labor, { orders: orders.length, timeEntries: entries.length }, laborHours));
     log(`  ${loc.id} ${date}: ${orders.length} orders, net $${sales.daily.net_sales.toFixed(2)}, ${entries.length} time entries, ${sales.tickets.length}/${sales.daily.orders} orders with a KDS ticket time`);
   };
 

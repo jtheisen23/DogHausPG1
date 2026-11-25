@@ -1383,13 +1383,128 @@ function ordersHeatmapCard(ctx, d) {
   return h('div', {}, el, w ? h('div', { class: 'small muted heat-note' }, `${fmtRange(w)} · complete Monday–Sunday weeks`) : null);
 }
 
+// By hour: demand, staffing & ticket time (one location). An SVG combo chart
+// matching the other brand's dashboard; colors come from the theme's series
+// variables so they follow light/dark: blue ticket time, amber staff, green orders.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function svgEl(name, attrs, text) {
+  const e = document.createElementNS(SVG_NS, name);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text != null) e.textContent = text;
+  return e;
+}
+const HP = { ticket: 'var(--s2)', staff: 'var(--s8)', orders: 'var(--s7)' };
+
+function hourTip() {
+  let t = document.getElementById('tooltip');
+  if (!t) {
+    t = h('div', { class: 'tt', id: 'tooltip' });
+    document.body.append(t);
+  }
+  return t;
+}
+function showHourTip(r, x, y) {
+  const t = hourTip();
+  const row = (k, v) => h('div', { class: 'row' }, h('span', { class: 'k' }, k), h('span', { class: 'v' }, v));
+  t.replaceChildren(
+    h('div', { class: 'hd' }, heatHour(r.hour)),
+    row('Orders', String(r.orders)),
+    row('Kitchen staff', String(r.kitchenStaff)),
+    row('Median ticket', r.median == null ? '—' : `${r.median} min`),
+  );
+  t.style.opacity = '1';
+  const pad = 14;
+  let left = x + pad;
+  let top = y + pad;
+  const b = t.getBoundingClientRect();
+  if (left + b.width > window.innerWidth) left = x - b.width - pad;
+  if (top + b.height > window.innerHeight) top = y - b.height - pad;
+  t.style.left = `${left}px`;
+  t.style.top = `${top}px`;
+}
+const hideHourTip = () => { const t = document.getElementById('tooltip'); if (t) t.style.opacity = '0'; };
+
+function hourCombo(rows) {
+  const W = 1120;
+  const H = 340;
+  const m = { top: 16, right: 54, bottom: 40, left: 50 };
+  const pw = W - m.left - m.right;
+  const ph = H - m.top - m.bottom;
+  let maxMin = 0;
+  let maxCount = 0;
+  for (const r of rows) {
+    if (r.median != null) maxMin = Math.max(maxMin, r.median);
+    maxCount = Math.max(maxCount, r.orders, r.kitchenStaff);
+  }
+  maxMin = maxMin * 1.15 || 1;
+  maxCount = maxCount * 1.15 || 1;
+  const band = pw / rows.length;
+  const xc = (i) => m.left + band * (i + 0.5);
+  const yL = (v) => m.top + ph - (ph * v) / maxMin;
+  const yR = (v) => m.top + ph - (ph * v) / maxCount;
+  const svg = svgEl('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Orders, kitchen staff and median ticket time by hour' });
+  const ticks = 4;
+  for (let t = 0; t <= ticks; t++) {
+    const v = (maxMin * t) / ticks;
+    const yy = yL(v);
+    svg.append(
+      svgEl('line', { x1: m.left, y1: yy, x2: W - m.right, y2: yy, style: 'stroke: var(--grid)', 'stroke-width': 1 }),
+      svgEl('text', { x: m.left - 8, y: yy + 4, 'text-anchor': 'end', style: 'fill: var(--muted)', 'font-size': 11 }, `${Math.round(v)}m`),
+      svgEl('text', { x: W - m.right + 8, y: yR((maxCount * t) / ticks) + 4, 'text-anchor': 'start', style: 'fill: var(--muted)', 'font-size': 11 }, String(Math.round((maxCount * t) / ticks))),
+    );
+  }
+  rows.forEach((r, i) => {
+    const bw = band * 0.6;
+    const by = yR(r.orders);
+    svg.append(
+      svgEl('rect', { x: xc(i) - bw / 2, y: by, width: bw, height: m.top + ph - by, style: `fill: ${HP.orders}; fill-opacity: 0.28`, rx: 2 }),
+      svgEl('text', { x: xc(i), y: H - 14, 'text-anchor': 'middle', style: 'fill: var(--muted)', 'font-size': 11 }, heatHour(r.hour)),
+    );
+  });
+  const line = (pts, color) => {
+    if (!pts.length) return;
+    const d = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0]} ${p[1]}`).join(' ');
+    svg.append(svgEl('path', { d, style: `fill: none; stroke: ${color}`, 'stroke-width': 2.5, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }));
+  };
+  line(rows.map((r, i) => [xc(i), yR(r.kitchenStaff)]), HP.staff);
+  line(rows.flatMap((r, i) => (r.median != null ? [[xc(i), yL(r.median)]] : [])), HP.ticket);
+  rows.forEach((r, i) => {
+    if (r.median != null) svg.append(svgEl('circle', { cx: xc(i), cy: yL(r.median), r: 3, style: `fill: ${HP.ticket}; stroke: var(--surface)`, 'stroke-width': 1.2 }));
+    const hit = svgEl('rect', { x: xc(i) - band / 2, y: m.top, width: band, height: ph, fill: 'transparent' });
+    hit.addEventListener('mousemove', (e) => showHourTip(r, e.clientX, e.clientY));
+    hit.addEventListener('click', (e) => showHourTip(r, e.clientX, e.clientY));
+    hit.addEventListener('mouseleave', hideHourTip);
+    svg.append(hit);
+  });
+  return svg;
+}
+
+/** The staffing card for one location, or null when it has no chart (the card hides). */
+function hourlyProfileCard(data) {
+  if (!data?.rows?.length) return null;
+  const swatch = (color, label) => h('span', {}, h('span', { class: 'swatch', style: { background: color } }), label);
+  const legend = h('div', { class: 'legend heat-legend', id: 'li-hour-legend' },
+    swatch(HP.orders, 'Orders/hr'), swatch(HP.staff, 'Kitchen staff'), swatch(HP.ticket, 'Median ticket'));
+  const el = card(
+    'By hour: demand, staffing & ticket time',
+    'Averages by hour of day. Bars = orders; lines = kitchen staff on the clock and median ticket time.',
+    null,
+    legend,
+    h('div', { class: 'hp-chart', id: 'li-hour' }, hourCombo(data.rows)),
+  );
+  el.id = 'li-hour-card';
+  const who = data.kitchenTitles?.length ? data.kitchenTitles.map((t) => `“${t}”`).join(', ') : '“kitchen”';
+  return h('div', {}, el, h('div', { class: 'small muted heat-note' },
+    `${fmtRange(data.window)} · kitchen staff = time on the clock as ${who}`));
+}
+
 /** Ticket-time card for one location, or a note saying why there isn't one. */
 function ticketSection(ctx, ids, data) {
   // The heatmap is per location: it only shows with one location selected.
   if (ids.length !== 1) {
     return h('div', { class: 'notice' },
-      h('b', {}, 'Ticket time by day & hour: pick one location. '),
-      'It is shown for one location at a time: Alt/⌘-click a location above to show only that one.');
+      h('b', {}, 'Ticket time by day & hour and the hourly staffing chart: pick one location. '),
+      'They are shown for one location at a time: Alt/⌘-click a location above to show only that one.');
   }
   const heat = ticketHeatmapCard(data);
   if (heat) return heat;
@@ -1498,13 +1613,15 @@ export async function kitchen(ctx) {
   const ids = ctx.q.locations;
   // One day selected: the trend runs across that day's hours.
   const oneDay = ctx.q.current.start === ctx.q.current.end;
-  const [trend, tickets, orders] = await Promise.all([
+  const [trend, tickets, staff, orders] = await Promise.all([
     ctx.api('/api/ticket-trend', { grain: oneDay ? 'hour' : trendGrain(ctx.q) }),
     ids.length === 1 ? ctx.api('/api/kitchen', { locations: ids[0] }) : null,
+    ids.length === 1 ? ctx.api('/api/staffing', { locations: ids[0] }) : null,
     ctx.api('/api/order-heatmap'),
   ]);
   const trendCard = ticketTrendCard(ctx, trend);
-  const node = h('div', { class: 'kitchen' }, trendCard.el, ticketSection(ctx, ids, tickets), ordersHeatmapCard(ctx, orders));
+  const node = h('div', { class: 'kitchen' },
+    trendCard.el, ticketSection(ctx, ids, tickets), hourlyProfileCard(staff), ordersHeatmapCard(ctx, orders));
   later(trendCard.draw);
   return node;
 }

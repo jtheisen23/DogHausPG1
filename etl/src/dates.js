@@ -67,3 +67,17 @@ export function hourIn(iso, timeZone) {
   }
   return Number(f.format(d)) % 24;
 }
+
+const partsFormatters = new Map();
+/** Local date (YYYY-MM-DD), hour, minute and second of an instant (ms) in a time zone. */
+export function localParts(ms, timeZone) {
+  let f = partsFormatters.get(timeZone);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-CA', {
+      timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+    });
+    partsFormatters.set(timeZone, f);
+  }
+  const p = Object.fromEntries(f.formatToParts(new Date(ms)).map((x) => [x.type, x.value]));
+  return { date: `${p.year}-${p.month}-${p.day}`, hour: Number(p.hour) % 24, minute: Number(p.minute), second: Number(p.second) };
+}

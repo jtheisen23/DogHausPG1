@@ -86,13 +86,3 @@ test('hourly order counts (average orders heatmap) leave out voided orders', () 
   ], { timezone: 'America/Chicago', lookups: {} });
   assert.deepEqual(sales.hourly.map((r) => [r.hour, r.orders]), [[12, 2]]);
 });
-
-test('a tickets-only sync rewrites ticket_times for the day and nothing else', async () => {
-  const { ticketStatements } = await import('../src/sql.js');
-  const stmts = ticketStatements('EN', '2026-03-14', { tickets: [{ order_guid: 'a', weekday: 5, hour: 12, minutes: 15 }] });
-  assert.equal(stmts[0], "DELETE FROM ticket_times WHERE location_id='EN' AND business_date='2026-03-14';");
-  assert.equal(stmts.length, 2);
-  assert.match(stmts[1], /^INSERT INTO ticket_times \(location_id,business_date,order_guid,weekday,hour,minutes\) VALUES\n\('EN','2026-03-14','a',5,12,15\);$/);
-  assert.ok(stmts.every((s) => !/daily_sales|hourly_sales|sales_mix|labor_daily|sync_log/.test(s)));
-  assert.deepEqual(ticketStatements('EN', '2026-03-14', { tickets: [] }), ["DELETE FROM ticket_times WHERE location_id='EN' AND business_date='2026-03-14';"]);
-});

@@ -3,8 +3,8 @@
 
 import { HttpError, requireSection } from './auth.js';
 import {
-  buildOrdersHeatmap, buildTicketHeatmap, calendarDate, completedWeeks, ordersHeatmapPayload, TICKET_GRAINS,
-  ticketTrendSql, todayIn,
+  buildHourlyProfile, buildOrdersHeatmap, buildTicketHeatmap, calendarDate, completedWeeks, kitchenTitles,
+  ordersHeatmapPayload, TICKET_GRAINS, ticketTrendSql, todayIn,
 } from './kitchen.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -513,5 +513,49 @@ export async function ticketTrend(env, url, user) {
     since: first.results[0]?.since ?? null,
     current: cur.results,
     compare: cmp ? cmp.results : null,
+  };
+}
+
+/**
+ * Kitchen tab: "By hour: demand, staffing & ticket time" for one location over
+ * its last 8 completed Monday-Sunday weeks: average orders, kitchen staff on
+ * the clock (job titles in KITCHEN_JOB_TITLES, default "Kitchen") and median
+ * ticket time per hour of day. `gate` and `jobTitles` say why a location has
+ * no chart (no KDS bumps, no kitchen job title, too few busy hours).
+ */
+export async function staffing(env, url, user) {
+  requireSection(user, 'sales');
+  const allowed = new Set(user.locations);
+  const requested = (url.searchParams.get('locations') || '').split(',').map((s) => s.trim()).filter((l) => allowed.has(l));
+  if (requested.length !== 1) return { location: null, rows: null, reason: 'one-location' };
+  const id = requested[0];
+  const loc = await env.DB.prepare('SELECT id, timezone FROM locations WHERE id = ?').bind(id).first();
+  if (!loc) throw new HttpError(404, 'Unknown location');
+  const window = completedWeeks(todayIn(loc.timezone || 'America/New_York'));
+  const titles = kitchenTitles(env);
+  const [orders, tickets, labor] = await env.DB.batch([
+    env.DB.prepare('SELECT business_date, hour, orders FROM hourly_sales WHERE location_id = ? AND business_date BETWEEN ? AND ? AND orders > 0')
+      .bind(id, window.start, window.end),
+    env.DB.prepare('SELECT business_date, hour, minutes FROM ticket_times WHERE location_id = ? AND business_date BETWEEN ? AND ?')
+      .bind(id, window.start, window.end),
+    env.DB.prepare(`SELECT local_date, hour, job_title, SUM(hours) AS hours FROM labor_hours
+      WHERE location_id = ? AND business_date BETWEEN ? AND ? GROUP BY local_date, hour, job_title`)
+      .bind(id, window.start, window.end),
+  ]);
+  const isKitchen = (t) => titles.has(String(t).trim().toLowerCase());
+  const byTitle = new Map();
+  for (const r of labor.results) byTitle.set(r.job_title, (byTitle.get(r.job_title) || 0) + r.hours);
+  const profile = buildHourlyProfile({
+    orders: orders.results.map((r) => ({ date: calendarDate(r.business_date, r.hour), hour: r.hour, orders: r.orders })),
+    tickets: tickets.results.map((r) => ({ date: calendarDate(r.business_date, r.hour), hour: r.hour, minutes: r.minutes })),
+    kitchen: labor.results.filter((r) => isKitchen(r.job_title)).map((r) => ({ date: r.local_date, hour: r.hour, hours: r.hours })),
+  });
+  return {
+    location: id,
+    window,
+    kitchenTitles: String(env.KITCHEN_JOB_TITLES || 'Kitchen').split(',').map((t) => t.trim()).filter(Boolean),
+    jobTitles: [...byTitle].sort((a, b) => b[1] - a[1]).map(([title, hours]) => ({ title, hours: Math.round(hours * 10) / 10, kitchen: isKitchen(title) })),
+    gate: profile.gate,
+    rows: profile.rows,
   };
 }
