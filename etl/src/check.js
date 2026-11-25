@@ -80,24 +80,30 @@ function ordersWithoutRevenueCenter(orders, ctx) {
  */
 async function kitchenProbe(toast, guid, date) {
   const path = '/kitchen/v1/export/itemFulfillments';
+  // Raw requests, so an empty or non-JSON reply is reported as it is.
+  if (!toast.token || Date.now() >= toast.tokenExpiresAt) await toast.authenticate();
+  const lines = [];
   let body = null;
   let used = null;
-  let lastErr = null;
   for (const d of [toToastDate(date), date]) {
-    try {
-      body = await toast.get(path, guid, { businessDate: d });
-      used = d;
-      break;
-    } catch (err) {
-      lastErr = err;
-      if (!/ 400 /.test(err.message)) break; // only a rejected date format is worth retrying
+    const url = new URL(toast.host + path);
+    url.searchParams.set('businessDate', d);
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${toast.token}`, 'Toast-Restaurant-External-ID': guid, Accept: 'application/json' },
+    });
+    const text = await res.text();
+    const type = res.headers.get('content-type') || 'none';
+    lines.push(`   Kitchen request businessDate=${d}: HTTP ${res.status}, content-type ${type}, ${text.length} bytes${text ? `: ${text.replace(/\s+/g, ' ').slice(0, 300)}` : ' (empty body)'}`);
+    if (res.ok && text) {
+      try { body = JSON.parse(text); used = d; break; } catch { /* not JSON; reported above */ }
     }
   }
   if (!body) {
-    return [`⚠️ **Kitchen (KDS)**: ${reason(lastErr)}. Ticket times need the API credential's **Kitchen** (kitchen:read) access, and Toast says this export needs its Restaurant Management subscription.`];
+    lines.unshift('⚠️ **Kitchen (KDS)**: no kitchen data came back (details below).');
+    return lines;
   }
   const records = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : [];
-  const lines = [`✅ **Kitchen (KDS)** for ${date}: ${records.length} item fulfillments read (businessDate=${used}; response: ${Array.isArray(body) ? 'array' : `{${Object.keys(body || {}).join(', ')}}`}).`];
+  lines.unshift(`✅ **Kitchen (KDS)** for ${date}: ${records.length} item fulfillments read (businessDate=${used}; response: ${Array.isArray(body) ? 'array' : `{${Object.keys(body || {}).join(', ')}}`}).`);
   if (!records.length) {
     lines.push("   No records. That's expected if the store doesn't use Toast KDS screens or was closed.");
     return lines;
