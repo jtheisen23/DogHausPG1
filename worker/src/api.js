@@ -3,7 +3,8 @@
 
 import { HttpError, requireSection } from './auth.js';
 import {
-  buildOrdersHeatmap, buildTicketHeatmap, calendarDate, completedWeeks, ordersHeatmapPayload, todayIn,
+  buildOrdersHeatmap, buildTicketHeatmap, calendarDate, completedWeeks, ordersHeatmapPayload, TICKET_GRAINS,
+  ticketTrendSql, todayIn,
 } from './kitchen.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -487,4 +488,30 @@ export async function orderHeatmap(env, url, user) {
     if (heat) byLoc[id] = heat;
   });
   return { windows, ...(ordersHeatmapPayload(byLoc, present) || { locations: [], byLoc: {}, max: 1 }) };
+}
+
+/**
+ * Kitchen tab: ticket-time trend for the selected period (and comparison),
+ * per location and pooled, by hour (one day), day, week or month. `since` is
+ * the first date with any ticket time for these locations.
+ */
+export async function ticketTrend(env, url, user) {
+  requireSection(user, 'sales');
+  const q = readQuery(url, user);
+  const grain = url.searchParams.get('grain') || 'day';
+  if (!TICKET_GRAINS.includes(grain)) throw new HttpError(400, `grain must be one of ${TICKET_GRAINS.join(', ')}`);
+  const sql = ticketTrendSql(grain, q.locations.length);
+  const inList = q.locations.map(() => '?').join(',');
+  const stmts = [
+    env.DB.prepare(`SELECT MIN(business_date) AS since FROM ticket_times WHERE location_id IN (${inList})`).bind(...q.locations),
+    env.DB.prepare(sql).bind(q.current.start, q.current.end, ...q.locations),
+  ];
+  if (q.compare) stmts.push(env.DB.prepare(sql).bind(q.compare.start, q.compare.end, ...q.locations));
+  const [first, cur, cmp] = await env.DB.batch(stmts);
+  return {
+    grain,
+    since: first.results[0]?.since ?? null,
+    current: cur.results,
+    compare: cmp ? cmp.results : null,
+  };
 }
