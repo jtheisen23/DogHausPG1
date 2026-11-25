@@ -29,7 +29,7 @@ import {
   matchLocations, notePresence, punchHours, punchLaborRows, reconcileActual, reconcileScheduled, reportByDate, salariedPay, SCHEDULED_ROW,
   SevenShiftsClient, weekStartOf, weekStartSetting,
 } from './sevenshifts.js';
-import { lit } from './sql.js';
+import { lit, purgeBeforeStatements } from './sql.js';
 import { D1Sink, FileSink } from './sink.js';
 
 const { values: args } = parseArgs({
@@ -142,6 +142,8 @@ async function main() {
       log(`${loc.id} log book: FAILED - ${err.message}`);
     }
   }
+  // Labor from before a location's startDate (training shifts) is dropped, as in the Toast sync.
+  for (const loc of locations) if (loc.startDate) await sink.write(purgeBeforeStatements(loc.id, loc.startDate));
   await sink.close();
   if (sink.rowsWritten !== undefined) log(`D1 rows written: ${sink.rowsWritten}`);
   if (failures) process.exitCode = 1;

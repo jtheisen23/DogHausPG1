@@ -219,6 +219,8 @@ function update() {
 function historyWarning({ current, compare }) {
   const firsts = allLocations
     .filter((l) => state.locs.includes(l.id))
+    // A store whose data starts on its first sales day (startDate) isn't missing history.
+    .filter((l) => !(l.first_sales_date && l.first_business_date >= l.first_sales_date))
     .map((l) => l.first_business_date)
     .filter(Boolean)
     .sort();

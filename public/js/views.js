@@ -4,7 +4,7 @@
 
 import { barChart, lineChart } from './charts.js';
 import {
-  bucketLabel, bucketize, bucketsFor, change, dataTable, daysBetween, deltaNode, div, eachDate, fmt, fmtDate, fmtRange, fmtWeekday, h,
+  addDays, bucketLabel, bucketize, bucketsFor, change, dataTable, daysBetween, deltaNode, div, eachDate, fmt, fmtDate, fmtRange, fmtWeekday, h,
   ICON_DOWN, ICON_UP, sumBy, svgIcon, toDate, totals, WEEKDAYS,
 } from './util.js';
 
@@ -113,7 +113,8 @@ const availableMetrics = (user) => Object.entries(METRICS).filter(([, m]) => !m.
  * buckets are aligned by position (1st week vs 1st week, etc.).
  */
 function trendSeries(ctx, rowsCur, rowsCmp, m, byLocation) {
-  const { grain, current, compare } = ctx.q;
+  const { current, compare } = ctx.q;
+  const grain = trendGrain(ctx.q);
   const fields = [...SALES_FIELDS, ...LABOR_FIELDS];
   const keys = bucketsFor(current, grain);
   const categories = keys.map((k) => bucketLabel(k, grain));
@@ -130,6 +131,7 @@ function trendSeries(ctx, rowsCur, rowsCmp, m, byLocation) {
           return t ? m.calc(t) : null;
         }),
       })),
+      grain,
     };
   }
   const b = bucketize(rowsCur, grain, null, fields);
@@ -149,7 +151,30 @@ function trendSeries(ctx, rowsCur, rowsCmp, m, byLocation) {
       data: keys.map((_, i) => { const t = ckeys[i] && cb.get(ckeys[i])?.get('_all'); return t ? m.calc(t) : null; }),
     });
   }
-  return { categories, series };
+  return { categories, series, grain };
+}
+
+/** A week or month grouping that leaves a single point is drawn by day instead, so the trend is a line. */
+function trendGrain(q) {
+  return q.grain !== 'day' && bucketsFor(q.current, q.grain).length < 2 ? 'day' : q.grain;
+}
+
+/**
+ * One day selected: metrics that aren't kept by hour can't make a line within
+ * the day, so their trend shows the 7 days ending on it, against the same 7
+ * days moved back as far as the comparison is (the previous week by default).
+ * Returns { ctx, data } for that window, or null for a longer range.
+ */
+const TREND_WINDOW_DAYS = 7;
+async function trendWindow(ctx, path) {
+  const { current, compare } = ctx.q;
+  if (current.start !== current.end) return null;
+  const win = { start: addDays(current.end, -(TREND_WINDOW_DAYS - 1)), end: current.end };
+  const shift = compare ? daysBetween(compare.start, current.start) : 0;
+  const cwin = compare ? { start: addDays(win.start, -shift), end: addDays(win.end, -shift) } : null;
+  const params = { start: win.start, end: win.end, ...(cwin ? { cstart: cwin.start, cend: cwin.end } : {}) };
+  const data = await ctx.api(path, params).catch(() => null);
+  return data && { ctx: { ...ctx, q: { ...ctx.q, current: win, compare: cwin, grain: 'day' } }, data };
 }
 
 // Metrics that exist per hour (hourly_sales has sales, orders and guests only).
@@ -217,9 +242,10 @@ const overviewState = { metric: 'net_sales', split: 'total' };
 export async function overview(ctx) {
   // With one day selected, the trend is drawn across that day's hours.
   const oneDay = ctx.q.current.start === ctx.q.current.end;
-  const [data, hourly] = await Promise.all([
+  const [data, hourly, win] = await Promise.all([
     ctx.api('/api/overview'),
     oneDay ? ctx.api('/api/mix', { dimension: 'hour' }).catch(() => null) : null,
+    trendWindow(ctx, '/api/overview'),
   ]);
   const hasCmp = !!ctx.q.compare;
   const { user } = ctx;
@@ -257,8 +283,21 @@ export async function overview(ctx) {
     const byHour = oneDay && hourly && HOURLY_METRICS.has(overviewState.metric)
       ? hourlyTrend(ctx, hourly, m, overviewState.split === 'location')
       : null;
-    trendSub.textContent = `${subtitle(ctx)} · by ${byHour ? 'hour' : ctx.q.grain}`;
-    const { categories, series } = byHour || trendSeries(ctx, rowsCur, rowsCmp, m, overviewState.split === 'location');
+    const byLocation = overviewState.split === 'location';
+    let t;
+    let tctx = ctx;
+    if (byHour) {
+      t = { ...byHour, grain: 'hour' };
+    } else if (win) {
+      tctx = win.ctx;
+      const wCur = mergeDaily(win.data.daily.current, win.data.laborDaily?.current);
+      const wCmp = tctx.q.compare ? mergeDaily(win.data.daily.compare, win.data.laborDaily?.compare) : null;
+      t = trendSeries(tctx, wCur, wCmp, m, byLocation);
+    } else {
+      t = trendSeries(ctx, rowsCur, rowsCmp, m, byLocation);
+    }
+    trendSub.textContent = `${subtitle(tctx)} · by ${t.grain}`;
+    const { categories, series } = t;
     lineChart(chartEl, { categories, series, format: m.fmt, axisFormat: m.axis || m.fmt, area: overviewState.split === 'total' && !m.rate, zeroBased: !m.rate });
   };
   if (!METRICS[overviewState.metric] || (METRICS[overviewState.metric].needs && !user.sections[METRICS[overviewState.metric].needs])) {
@@ -536,7 +575,7 @@ function renderMix(ctx, data) {
 const approverState = { view: 'discount' };
 
 export async function discounts(ctx) {
-  const data = await ctx.api('/api/discounts');
+  const [data, win] = await Promise.all([ctx.api('/api/discounts'), trendWindow(ctx, '/api/discounts')]);
   const hasCmp = !!ctx.q.compare;
   const ids = ctx.q.locations;
   const f = ['gross_sales', 'discounts', 'net_sales'];
@@ -696,7 +735,9 @@ export async function discounts(ctx) {
   if (hasCmp) barSeries.push({ name: 'Comparison', color: 'compare', data: top.map((r) => r.amountCmp) });
 
   const trendEl = chartBox();
-  const trend = trendSeries(ctx, data.daily.current, data.daily.compare, METRICS.discount_pct, false);
+  const trendCtx = win?.ctx || ctx;
+  const trendData = win?.data || data;
+  const trend = trendSeries(trendCtx, trendData.daily.current, trendCtx.q.compare ? trendData.daily.compare : null, METRICS.discount_pct, false);
 
   const locEl = chartBox();
   const locT = sumBy(data.daily.current, 'location_id', f);
@@ -709,7 +750,7 @@ export async function discounts(ctx) {
     h('div', { class: 'grid two' },
       card('Top discounts', subtitle(ctx), null, barEl),
       card('Discount % of gross by location', subtitle(ctx), null, locEl)),
-    card('Discount % trend', `${subtitle(ctx)} · by ${ctx.q.grain}`, null, trendEl),
+    card('Discount % trend', `${subtitle(trendCtx)} · by ${trend.grain}`, null, trendEl),
     card('All discounts', `${subtitle(ctx)}${nameTable.expander ? ' · click a group to see the Toast discounts in it' : ''}`, [nameTable.expander, csvButton(() => nameTable)],
       rows.length ? nameTable.el : h('div', { class: 'empty' }, 'No discounts in this period')),
     card('Comps by approver', `Discounts that required a manager approval · ${subtitle(ctx)}${approvers.length === 15 && apprTotals.size > 15 ? ' · top 15 shown' : ''}`, apprTools,
@@ -730,7 +771,7 @@ export async function discounts(ctx) {
 const laborState = { metric: 'labor_pct' };
 
 export async function labor(ctx) {
-  const data = await ctx.api('/api/labor');
+  const [data, win] = await Promise.all([ctx.api('/api/labor'), trendWindow(ctx, '/api/labor')]);
   const hasCmp = !!ctx.q.compare;
   const ids = ctx.q.locations;
   const hasSales = !!data.sales;
@@ -753,8 +794,10 @@ export async function labor(ctx) {
   }
 
   // Trend by location (labor %, cost, hours or SPLH)
-  const rowsCur = mergeDaily(data.sales?.current, data.daily.current);
-  const rowsCmp = hasCmp ? mergeDaily(data.sales?.compare, data.daily.compare) : null;
+  const trendCtx = win?.ctx || ctx;
+  const trendData = win?.data || data;
+  const rowsCur = mergeDaily(trendData.sales?.current, trendData.daily.current);
+  const rowsCmp = trendCtx.q.compare ? mergeDaily(trendData.sales?.compare, trendData.daily.compare) : null;
   const trendMetrics = [
     ...(hasSales ? [['labor_pct', 'Labor %'], ['splh', 'SPLH']] : []),
     ['cost', 'Labor $'],
@@ -770,7 +813,7 @@ export async function labor(ctx) {
   const drawTrend = () => {
     window.echarts.getInstanceByDom(trendEl)?.dispose();
     const m = METRICS[laborState.metric] || extra[laborState.metric];
-    const t = trendSeries(ctx, rowsCur, rowsCmp, m, split.v === 'location');
+    const t = trendSeries(trendCtx, rowsCur, rowsCmp, m, split.v === 'location');
     lineChart(trendEl, { ...t, format: m.fmt, axisFormat: m.axis || m.fmt, zeroBased: !m.rate });
   };
   const metricSeg = seg(trendMetrics, laborState.metric, (v) => { laborState.metric = v; drawTrend(); });
@@ -874,7 +917,7 @@ export async function labor(ctx) {
   const node = h('div', {},
     hasSales ? null : h('div', { class: 'notice' }, 'Labor % and sales per labor hour are hidden because your account does not include sales access.'),
     h('div', { class: 'grid kpis' }, tiles),
-    card('Labor trend', `${subtitle(ctx)} · by ${ctx.q.grain}`, [metricSeg, splitSeg], trendEl),
+    card('Labor trend', `${subtitle(trendCtx)} · by ${trendGrain(trendCtx.q)}`, [metricSeg, splitSeg], trendEl),
     card('Labor by location', subtitle(ctx), csvButton(() => locTable), locTable.el),
     card('Labor cost by job', subtitle(ctx), null, jobEl),
     card('Jobs', subtitle(ctx), csvButton(() => jobTable), jobTable.el),
