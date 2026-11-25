@@ -183,6 +183,7 @@ tr.total td { font-weight: 650; border-top: 1px solid var(--axis); border-bottom
 
 .empty, .error { padding: 40px; text-align: center; color: var(--text-2); }
 .error { color: var(--bad); }
+.chart-error { padding: 24px 12px; text-align: center; color: var(--bad); font-size: 13px; }
 .notice {
   border: 1px solid var(--border); background: var(--surface-2); border-radius: 8px; padding: 10px 12px;
   color: var(--text-2); font-size: 13px; margin-bottom: 16px;

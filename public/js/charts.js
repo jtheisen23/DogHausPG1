@@ -23,12 +23,41 @@ function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
+/** Shows why a chart couldn't be drawn in its own box, instead of leaving it blank. */
+export function chartError(el, err) {
+  console.error('Chart failed to draw:', err);
+  const msg = document.createElement('div');
+  msg.className = 'chart-error';
+  msg.textContent = `This chart couldn't be drawn: ${err?.message || err}`;
+  el.replaceChildren(msg);
+}
+
 function mount(el, build) {
-  const inst = window.echarts.init(el, null, { renderer: 'svg' });
-  const entry = { inst, apply: () => inst.setOption(build(theme()), true) };
-  entry.apply();
-  registry.add(entry);
-  return inst;
+  const start = () => {
+    try {
+      const inst = window.echarts.init(el, null, { renderer: 'svg' });
+      const entry = {
+        inst,
+        apply: () => {
+          try { inst.setOption(build(theme()), true); } catch (err) { chartError(el, err); }
+        },
+      };
+      entry.apply();
+      registry.add(entry);
+    } catch (err) {
+      chartError(el, err);
+    }
+  };
+  // ECharts draws nothing into a box that has no size yet (it can happen on
+  // Safari right after the page is built), so wait until the box is laid out.
+  if (el.clientWidth > 0 && el.clientHeight > 0) {
+    start();
+  } else {
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth > 0 && el.clientHeight > 0) { ro.disconnect(); start(); }
+    });
+    ro.observe(el);
+  }
 }
 
 export function disposeCharts() {
@@ -87,6 +116,16 @@ function legend(t, show, bars = false) {
  * `labels` lets a comparison series show its own dates in the tooltip.
  */
 export function lineChart(el, { categories, series, format = (v) => v, axisFormat, area = false, zeroBased = true }) {
+  // One point can't make a line (a single day, week or month selected): it
+  // would show as a lone dot, so show current vs comparison as bars instead.
+  if (categories.length === 1) {
+    return barChart(el, {
+      categories,
+      series: series.map(({ name, data, colorIndex, color }) => ({ name, data, colorIndex, color })),
+      format,
+      axisFormat,
+    });
+  }
   return mount(el, (t) => {
     const colorOf = (s) => (s.color === 'compare' ? t.compare : t.series[(s.colorIndex ?? 0) % 8]);
     return {

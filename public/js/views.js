@@ -63,9 +63,22 @@ function chartBox(tall) {
   return h('div', { class: tall ? 'chart tall' : 'chart' });
 }
 
-/** Mount a chart after the node is in the document (ECharts needs a sized element). */
+/**
+ * Mount a chart after the node is in the document (ECharts needs a sized element).
+ * An error while preparing a chart's data is shown on the page, not swallowed.
+ */
 function later(fn) {
-  requestAnimationFrame(() => requestAnimationFrame(fn));
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    try {
+      fn();
+    } catch (err) {
+      console.error('Chart failed to draw:', err);
+      const view = document.getElementById('view');
+      if (view && !view.querySelector(':scope > .chart-error')) {
+        view.prepend(h('div', { class: 'chart-error' }, `A chart couldn't be drawn: ${err?.message || err}`));
+      }
+    }
+  }));
 }
 
 const SALES_FIELDS = ['orders', 'guests', 'gross_sales', 'discounts', 'net_sales', 'voids', 'void_count', 'checks', 'tips'];
