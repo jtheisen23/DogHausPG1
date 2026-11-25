@@ -272,6 +272,8 @@ export async function locations(env, user) {
     `SELECT l.id, l.name, l.timezone,
             (SELECT MAX(business_date) FROM daily_sales d WHERE d.location_id = l.id) AS last_business_date,
             (SELECT MIN(business_date) FROM daily_sales d WHERE d.location_id = l.id) AS first_business_date,
+            -- First day with real sales (the backfill also stores empty days before a store opened).
+            (SELECT MIN(business_date) FROM daily_sales d WHERE d.location_id = l.id AND d.net_sales > 0) AS first_sales_date,
             (SELECT MAX(synced_at) FROM sync_log s WHERE s.location_id = l.id) AS last_synced_at,
             (SELECT synced_at FROM sync_log s WHERE s.location_id = l.id AND s.business_date = ?) AS yesterday_synced_at
        FROM locations l
