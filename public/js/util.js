@@ -130,9 +130,9 @@ export const PRESETS = [
 ];
 
 export const COMPARES = [
-  ['yoy364', 'Same period last year (by weekday)'],
+  ['prev', 'Same days previous week'],
   ['yoy', 'Same dates last year'],
-  ['prev', 'Prior week (same weekdays)'],
+  ['yoy364', 'Same period last year (by weekday)'],
   ['custom', 'Custom range…'],
   ['none', 'No comparison'],
 ];

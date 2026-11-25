@@ -17,9 +17,10 @@ Workers Paid plan (everything else is free).
 
 The filters apply to every tab. **Date range** presets: today, yesterday, last 7/30/90/365 days,
 week/month/quarter/year to date, last week/month/quarter/year, or a custom range. **Compare to**:
-same period last year matched by weekday (the default: a Saturday is compared with a Saturday),
-the same calendar dates last year, the prior week on the same weekdays (ranges longer than a week go
-back as many whole weeks as they need not to overlap), or a custom range. You can also group by
+the same days previous week (ranges longer than a week go back as many whole weeks as they need
+not to overlap), the same calendar dates last year, the same period last year matched by weekday (a
+Saturday is compared with a Saturday), or a custom range. The default is the same days previous week
+until every store has a year of sales, then the same period last year by weekday. You can also group by
 day/week/month and pick locations (Alt/⌘-click shows only that location). The filters are saved
 in the URL, so a bookmarked or shared link opens the same view. Every table can be sorted and
 exported to CSV. Light and dark mode are both supported.
