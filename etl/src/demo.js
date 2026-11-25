@@ -226,7 +226,7 @@ async function main() {
   }
   // A demo manager who can only see Downtown sales + labor, to try out permissions.
   await sink.write([
-    `INSERT INTO users (email,name,role,all_locations,can_sales,can_discounts,can_labor,can_items) VALUES (${lit('dt.manager@example.com')},${lit('DT Manager (demo)')},'viewer',0,1,1,1,1) ON CONFLICT(email) DO NOTHING;`,
+    `INSERT INTO users (email,name,role,all_locations,can_sales,can_discounts,can_labor,can_items,can_kitchen) VALUES (${lit('dt.manager@example.com')},${lit('DT Manager (demo)')},'viewer',0,1,1,1,1,1) ON CONFLICT(email) DO NOTHING;`,
     `INSERT INTO user_locations (email,location_id) VALUES ('dt.manager@example.com','DT') ON CONFLICT DO NOTHING;`,
   ]);
   console.error(`Wrote demo data ${start} .. ${end} to ${args.out}`);

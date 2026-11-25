@@ -14,6 +14,7 @@ import { addDays, parseDate, todayIn, toToastDate } from './dates.js';
 import { loadLocations } from './config.js';
 import { ToastClient } from './toast.js';
 import { aggregateLabor, aggregateOrders, laborHoursByHour } from './transform.js';
+import { kitchenTitles } from '../../worker/src/kitchen.js';
 
 const { values: args } = parseArgs({
   options: {
@@ -106,12 +107,12 @@ function ticketTimeLine(orders, sales) {
 
 /**
  * Kitchen tab staffing chart: job titles on the clock, the hours that count as
- * kitchen staff (KITCHEN_JOB_TITLES, default "Kitchen") and how many of the
+ * kitchen staff (KITCHEN_JOB_TITLES, default Kitchen and Expo) and how many of the
  * day's hours have >= 3 orders, >= 0.25 kitchen hours and a timed ticket (the
  * chart needs 6 such hours over its 8 weeks).
  */
 function staffingLines(entries, sales, date, ctx) {
-  const kitchen = new Set((process.env.KITCHEN_JOB_TITLES || 'Kitchen').split(',').map((t) => t.trim().toLowerCase()).filter(Boolean));
+  const kitchen = kitchenTitles(process.env);
   const rows = laborHoursByHour(entries, ctx);
   const byTitle = new Map();
   for (const r of rows) byTitle.set(r.job_title, (byTitle.get(r.job_title) || 0) + r.hours);

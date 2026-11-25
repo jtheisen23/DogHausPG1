@@ -3,7 +3,7 @@
 
 import { HttpError, requireSection } from './auth.js';
 import {
-  buildHourlyProfile, buildOrdersHeatmap, buildTicketHeatmap, calendarDate, completedWeeks, kitchenTitles,
+  buildHourlyProfile, buildOrdersHeatmap, buildTicketHeatmap, calendarDate, completedWeeks, kitchenTitleList, kitchenTitles,
   ordersHeatmapPayload, TICKET_GRAINS, ticketTrendSql, todayIn,
 } from './kitchen.js';
 
@@ -434,7 +434,7 @@ export async function logBookFile(env, url, user) {
  * vs `orders` says how much of that location's business was bumped on the KDS.
  */
 export async function kitchen(env, url, user) {
-  requireSection(user, 'sales');
+  requireSection(user, 'kitchen');
   const allowed = new Set(user.locations);
   const requested = (url.searchParams.get('locations') || '')
     .split(',')
@@ -466,7 +466,7 @@ export async function kitchen(env, url, user) {
  * shared color scale. Needs no KDS: every location with orders has one.
  */
 export async function orderHeatmap(env, url, user) {
-  requireSection(user, 'sales');
+  requireSection(user, 'kitchen');
   const allowed = new Set(user.locations);
   const requested = (url.searchParams.get('locations') || '').split(',').map((s) => s.trim()).filter(Boolean);
   const ids = requested.length ? requested.filter((l) => allowed.has(l)) : [...allowed];
@@ -496,7 +496,7 @@ export async function orderHeatmap(env, url, user) {
  * the first date with any ticket time for these locations.
  */
 export async function ticketTrend(env, url, user) {
-  requireSection(user, 'sales');
+  requireSection(user, 'kitchen');
   const q = readQuery(url, user);
   const grain = url.searchParams.get('grain') || 'day';
   if (!TICKET_GRAINS.includes(grain)) throw new HttpError(400, `grain must be one of ${TICKET_GRAINS.join(', ')}`);
@@ -519,12 +519,12 @@ export async function ticketTrend(env, url, user) {
 /**
  * Kitchen tab: "By hour: demand, staffing & ticket time" for one location over
  * its last 8 completed Monday-Sunday weeks: average orders, kitchen staff on
- * the clock (job titles in KITCHEN_JOB_TITLES, default "Kitchen") and median
+ * the clock (job titles in KITCHEN_JOB_TITLES, default Kitchen and Expo) and median
  * ticket time per hour of day. `gate` and `jobTitles` say why a location has
  * no chart (no KDS bumps, no kitchen job title, too few busy hours).
  */
 export async function staffing(env, url, user) {
-  requireSection(user, 'sales');
+  requireSection(user, 'kitchen');
   const allowed = new Set(user.locations);
   const requested = (url.searchParams.get('locations') || '').split(',').map((s) => s.trim()).filter((l) => allowed.has(l));
   if (requested.length !== 1) return { location: null, rows: null, reason: 'one-location' };
@@ -553,7 +553,7 @@ export async function staffing(env, url, user) {
   return {
     location: id,
     window,
-    kitchenTitles: String(env.KITCHEN_JOB_TITLES || 'Kitchen').split(',').map((t) => t.trim()).filter(Boolean),
+    kitchenTitles: kitchenTitleList(env),
     jobTitles: [...byTitle].sort((a, b) => b[1] - a[1]).map(([title, hours]) => ({ title, hours: Math.round(hours * 10) / 10, kitchen: isKitchen(title) })),
     gate: profile.gate,
     rows: profile.rows,

@@ -15,7 +15,7 @@ export class HttpError extends Error {
   }
 }
 
-export const SECTIONS = ['sales', 'discounts', 'labor', 'items', 'sevenshifts'];
+export const SECTIONS = ['sales', 'discounts', 'labor', 'items', 'kitchen', 'sevenshifts'];
 
 let jwksCache = { domain: null, keys: new Map(), fetchedAt: 0 };
 
@@ -128,7 +128,7 @@ export function bootstrapAdmins(env) {
 
 /**
  * Returns the signed-in user with resolved permissions:
- * { email, name, role, isAdmin, locations: string[], sections: {sales,discounts,labor,items} }
+ * { email, name, role, isAdmin, locations: string[], sections: {sales,discounts,labor,items,kitchen,sevenshifts} }
  */
 export async function authenticate(request, env) {
   const { email, loginAt } = await identify(request, env);

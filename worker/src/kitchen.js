@@ -189,9 +189,16 @@ export function ticketTrendSql(grain, locationCount) {
 // date-hours with 3+ orders, 0.25+ kitchen staff hours and a timed ticket.
 export const STAFFING_GATE = { minOrders: 3, minKitchenHours: 0.25, minUnits: 6 };
 
-/** The job titles that count as kitchen staff (exact, case-insensitive). */
+/**
+ * Toast job titles that count as kitchen staff (exact, case-insensitive). The
+ * KITCHEN_JOB_TITLES variable (comma-separated) overrides this list.
+ */
+export const DEFAULT_KITCHEN_JOB_TITLES = 'Kitchen,Expo';
+export function kitchenTitleList(env) {
+  return String(env?.KITCHEN_JOB_TITLES || DEFAULT_KITCHEN_JOB_TITLES).split(',').map((t) => t.trim()).filter(Boolean);
+}
 export function kitchenTitles(env) {
-  return new Set(String(env?.KITCHEN_JOB_TITLES || 'Kitchen').split(',').map((t) => t.trim().toLowerCase()).filter(Boolean));
+  return new Set(kitchenTitleList(env).map((t) => t.toLowerCase()));
 }
 
 const add = (map, key, v) => map.set(key, (map.get(key) || 0) + v);

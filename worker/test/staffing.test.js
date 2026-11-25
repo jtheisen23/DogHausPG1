@@ -48,7 +48,7 @@ test('the gate needs timed tickets and 6 date-hours with 3+ orders, 0.25+ kitche
   assert.equal(buildHourlyProfile(busyHours(8, { orders: 2 })).gate.units, 0); // too quiet
 });
 
-test('kitchen job titles: default "Kitchen", or a comma-separated list, case-insensitive', () => {
-  assert.deepEqual([...kitchenTitles({})], ['kitchen']);
+test('kitchen job titles: default Kitchen and Expo, or a comma-separated list, case-insensitive', () => {
+  assert.deepEqual([...kitchenTitles({})], ['kitchen', 'expo']);
   assert.deepEqual([...kitchenTitles({ KITCHEN_JOB_TITLES: ' Kitchen, Expo ,' })], ['kitchen', 'expo']);
 });
