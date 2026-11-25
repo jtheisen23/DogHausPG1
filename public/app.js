@@ -81,7 +81,7 @@ function readState() {
 
 /**
  * "Same period last year" only means something once every store has a year of
- * sales. Until then last year is mostly empty, so default to the prior week.
+ * sales. Until then last year is mostly empty, so default to the same days previous week.
  */
 function defaultCompare(current) {
   const firsts = allLocations.map((l) => l.first_sales_date);
@@ -242,7 +242,7 @@ function openingNotice({ compare }) {
   return h('div', { class: 'notice' },
     h('b', {}, 'Not open for all of the comparison dates: '),
     `${names}. Their comparison numbers are $0 before they opened.`,
-    state.cmp === 'prev' ? '' : ' For a like-for-like comparison, compare to the prior week.');
+    state.cmp === 'prev' ? '' : ' For a like-for-like comparison, compare to the same days previous week.');
 }
 
 async function render() {
