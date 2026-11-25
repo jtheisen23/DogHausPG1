@@ -253,6 +253,7 @@ added to the Access policy (step 3) by hand.
 | Hour of day | Hour the order was opened, in the location's time zone |
 | Revenue center | The order's revenue center in Toast. Orders Toast saved without one (for example DoorDash orders sent in before the integration had a revenue center) go to the revenue center whose name starts their dining option's name ("DoorDash - Delivery" → DoorDash); the rest show as Unspecified |
 | Item sales | Check-level discounts are spread across the items on each check, so item totals add up to net sales |
+| Ticket time (Kitchen tab, estimated) | Per order: earliest non-voided item fired (its `createdDate`) to the latest item marked `READY` on the Toast KDS (that item's `modifiedDate`). Orders with no READY item, or a span outside 0–240 minutes, have no ticket time. The heatmap shows, for one location, the median per weekday × hour the order was opened (local time) over the last 8 complete Monday–Sunday weeks; cells with fewer than 3 tickets are blank, and the tooltip adds the share over 20 minutes. Only kitchens that bump tickets on the KDS have data; the card is hidden for the rest |
 
 When you first connect Toast, compare one day per location against Toast's **Sales Summary**
 report. If your Toast setup counts something differently (for example, service charges inside

@@ -40,6 +40,8 @@ async function route(request, env) {
         return json(await api.labor(env, url, user));
       case '/api/items':
         return json(await api.items(env, url, user));
+      case '/api/kitchen':
+        return json(await api.kitchen(env, url, user));
       case '/api/sevenshifts':
         return json(await api.sevenShifts(env, url, user));
       case '/api/logbook':

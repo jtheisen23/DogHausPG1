@@ -19,8 +19,8 @@ test('startDate is optional and must be a real date', () => {
 
 test('purgeBeforeStatements clears every per-day table before the start date', () => {
   const sql = purgeBeforeStatements('HS', '2026-11-12');
-  for (const t of ['daily_sales', 'hourly_sales', 'sales_mix', 'item_sales', 'discount_sales', 'labor_daily', 'scheduled_labor', 'log_book_posts', 'sync_log']) {
+  for (const t of ['daily_sales', 'hourly_sales', 'sales_mix', 'item_sales', 'discount_sales', 'ticket_times', 'labor_daily', 'scheduled_labor', 'log_book_posts', 'sync_log']) {
     assert.ok(sql.includes(`DELETE FROM ${t} WHERE location_id='HS' AND business_date < '2026-11-12';`), t);
   }
-  assert.equal(sql.length, 9);
+  assert.equal(sql.length, 10);
 });

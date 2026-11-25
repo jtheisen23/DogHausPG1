@@ -2,6 +2,7 @@
 // signed-in user is allowed to see, and each section checks its permission.
 
 import { HttpError, requireSection } from './auth.js';
+import { buildTicketHeatmap, completedWeeks, todayIn } from './kitchen.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_RANGE_DAYS = 1100;
@@ -421,4 +422,37 @@ export async function logBookFile(env, url, user) {
       'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
     },
   });
+}
+
+/**
+ * Kitchen tab: one location's ticket-time heatmap (median minutes from first
+ * item fired to last item READY, by local weekday and hour) over the last 8
+ * completed Monday-Sunday weeks. Shown for a single location only; `timed`
+ * vs `orders` says how much of that location's business was bumped on the KDS.
+ */
+export async function kitchen(env, url, user) {
+  requireSection(user, 'sales');
+  const allowed = new Set(user.locations);
+  const requested = (url.searchParams.get('locations') || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((l) => allowed.has(l));
+  if (requested.length !== 1) return { location: null, heatmap: null, reason: 'one-location' };
+  const id = requested[0];
+  const loc = await env.DB.prepare('SELECT id, name, timezone FROM locations WHERE id = ?').bind(id).first();
+  if (!loc) throw new HttpError(404, 'Unknown location');
+  const window = completedWeeks(todayIn(loc.timezone || 'America/New_York'));
+  const [rows, orders] = await env.DB.batch([
+    env.DB.prepare('SELECT weekday, hour, minutes FROM ticket_times WHERE location_id = ? AND business_date BETWEEN ? AND ?')
+      .bind(id, window.start, window.end),
+    env.DB.prepare('SELECT COALESCE(SUM(orders), 0) AS orders FROM daily_sales WHERE location_id = ? AND business_date BETWEEN ? AND ?')
+      .bind(id, window.start, window.end),
+  ]);
+  return {
+    location: id,
+    window,
+    timed: rows.results.length,
+    orders: orders.results[0]?.orders ?? 0,
+    heatmap: buildTicketHeatmap(rows.results),
+  };
 }

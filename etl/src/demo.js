@@ -19,8 +19,9 @@ const { values: args } = parseArgs({
 });
 
 const LOCATIONS = [
-  { id: 'DT', name: 'Downtown (demo)', base: 9500, tz: 'America/New_York' },
-  { id: 'UT', name: 'Uptown (demo)', base: 11500, tz: 'America/New_York' },
+  // kitchen: how slow tickets run when busy; Westside doesn't bump on the KDS (no ticket times).
+  { id: 'DT', name: 'Downtown (demo)', base: 9500, tz: 'America/New_York', kitchen: 1 },
+  { id: 'UT', name: 'Uptown (demo)', base: 11500, tz: 'America/New_York', kitchen: 1.3 },
   { id: 'WS', name: 'Westside (demo)', base: 7200, tz: 'America/New_York' },
 ];
 
@@ -86,7 +87,23 @@ function growth(date) {
   return 1 + 0.06 * years;
 }
 
-function day(loc, date) {
+/** Ticket times (fired to READY) for most of the day's orders; busier hours run slower. */
+function ticketsFor(loc, date, hourly) {
+  const dow = parseDate(date).getUTCDay();
+  const weekday = (dow + 6) % 7; // Monday = 0
+  const tickets = [];
+  for (const { hour, orders } of hourly) {
+    const load = HOURS[hour] * DOW[dow] * loc.kitchen;
+    for (let i = 0; i < orders; i++) {
+      if (rand() > 0.8) continue; // not every order is bumped
+      const minutes = 5 + 75 * load * jitter(0.35) + rand() * 5;
+      tickets.push({ order_guid: `${loc.id}-${date}-${hour}-${i}`, weekday, hour, minutes: round2(minutes) });
+    }
+  }
+  return tickets;
+}
+
+function day(loc, date, withTickets = false) {
   const dow = parseDate(date).getUTCDay();
   const gross = loc.base * DOW[dow] * seasonal(date) * growth(date) * jitter(0.12);
   const avgCheck = 31 * jitter(0.06);
@@ -175,6 +192,7 @@ function day(loc, date) {
       mix,
       items,
       discounts,
+      tickets: withTickets && loc.kitchen ? ticketsFor(loc, date, hourly) : [],
     },
     labor,
   };
@@ -184,10 +202,11 @@ async function main() {
   const end = args.end || addDays(todayIn('America/New_York'), -1);
   const start = args.start || '2024-07-01';
   const sink = new FileSink(args.out);
+  const ticketsFrom = addDays(end, -70); // the Kitchen tab looks at the last 8 full weeks
   await sink.write(upsertLocationsSql(LOCATIONS.map((l) => ({ ...l, toastGuid: null, timezone: l.tz }))));
   for (const date of eachDate(start, end)) {
     for (const loc of LOCATIONS) {
-      const { sales, labor } = day(loc, date);
+      const { sales, labor } = day(loc, date, date >= ticketsFrom);
       await sink.write(dayStatements(loc.id, date, sales, labor, { orders: sales.daily.orders, syncedAt: `${end}T12:00:00Z` }));
     }
   }

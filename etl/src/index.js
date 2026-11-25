@@ -95,7 +95,7 @@ async function main() {
       });
     }
     await sink.write(dayStatements(loc.id, date, sales, labor, { orders: orders.length, timeEntries: entries.length }));
-    log(`  ${loc.id} ${date}: ${orders.length} orders, net $${sales.daily.net_sales.toFixed(2)}, ${entries.length} time entries`);
+    log(`  ${loc.id} ${date}: ${orders.length} orders, net $${sales.daily.net_sales.toFixed(2)}, ${entries.length} time entries, ${sales.tickets.length}/${sales.daily.orders} orders with a KDS ticket time`);
   };
 
   let failures = 0;

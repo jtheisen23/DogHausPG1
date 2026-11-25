@@ -41,6 +41,21 @@ export function fromToastDate(v) {
 
 const hourFormatters = new Map();
 /** Hour of day (0-23) of an ISO timestamp in the given time zone. */
+const weekdayFormatters = new Map();
+const WEEKDAY_INDEX = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
+/** Local weekday of an instant, Monday = 0 ... Sunday = 6; null for a missing or bad time. */
+export function weekdayIn(iso, timeZone) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  let f = weekdayFormatters.get(timeZone);
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short' });
+    weekdayFormatters.set(timeZone, f);
+  }
+  return WEEKDAY_INDEX[f.format(d)] ?? null;
+}
+
 export function hourIn(iso, timeZone) {
   if (!iso) return null;
   const d = new Date(iso);
