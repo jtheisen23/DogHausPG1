@@ -8,6 +8,8 @@
 //   node etl/src/index.js --backfill --from 2025-01-01 --max-rows 1000000  # history load
 //   node etl/src/index.js --start 2026-02-01 --end 2026-10-10 --revenue-centers-only
 //                                   # rewrite only revenue center sales (after a mapping fix)
+//   node etl/src/index.js --start 2025-11-25 --end 2026-09-27 --tickets-only
+//                                   # load only KDS ticket times (Kitchen tab) for past days
 //
 // Environment: TOAST_CLIENT_ID, TOAST_CLIENT_SECRET, [TOAST_API_HOST],
 //   CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN, D1_DATABASE_ID,
@@ -18,7 +20,7 @@ import { addDays, eachDate, parseDate, todayIn, toToastDate } from './dates.js';
 import { loadLocations } from './config.js';
 import { ToastClient } from './toast.js';
 import { aggregateLabor, aggregateOrders } from './transform.js';
-import { dayStatements, mixStatements, purgeBeforeStatements, upsertLocationsSql } from './sql.js';
+import { dayStatements, mixStatements, purgeBeforeStatements, ticketStatements, upsertLocationsSql } from './sql.js';
 import { D1Sink, FileSink } from './sink.js';
 
 const { values: args } = parseArgs({
@@ -30,6 +32,7 @@ const { values: args } = parseArgs({
     out: { type: 'string' },
     'skip-labor': { type: 'boolean', default: false },
     'revenue-centers-only': { type: 'boolean', default: false },
+    'tickets-only': { type: 'boolean', default: false },
     backfill: { type: 'boolean', default: false },
     from: { type: 'string', default: '2025-01-01' },
     'max-rows': { type: 'string', default: '1000000' },
@@ -42,6 +45,8 @@ const log = (...a) => console.error(new Date().toISOString(), ...a);
 async function main() {
   // Backfill progress comes from sync_log, which a revenue-centers-only run doesn't update.
   if (args.backfill && args['revenue-centers-only']) throw new Error('--revenue-centers-only needs --start/--days, not --backfill');
+  if (args.backfill && args['tickets-only']) throw new Error('--tickets-only needs --start/--days, not --backfill');
+  if (args['revenue-centers-only'] && args['tickets-only']) throw new Error('Use --revenue-centers-only or --tickets-only, not both');
   let locations = loadLocations(args.config);
   if (args.locations) {
     const want = new Set(args.locations.split(',').map((s) => s.trim().toUpperCase()));
@@ -82,6 +87,11 @@ async function main() {
     if (args['revenue-centers-only']) {
       await sink.write(mixStatements(loc.id, date, sales, 'revenue_center'));
       log(`  ${loc.id} ${date}: ${orders.length} orders, revenue centers rewritten`);
+      return;
+    }
+    if (args['tickets-only']) {
+      await sink.write(ticketStatements(loc.id, date, sales));
+      log(`  ${loc.id} ${date}: ${sales.tickets.length}/${sales.daily.orders} orders with a KDS ticket time (ticket times only)`);
       return;
     }
     let entries = [];

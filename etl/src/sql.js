@@ -40,6 +40,7 @@ export function upsertLocationsSql(locations) {
 }
 
 const TABLES = ['daily_sales', 'hourly_sales', 'sales_mix', 'item_sales', 'discount_sales', 'ticket_times', 'labor_daily'];
+const TICKET_COLUMNS = ['location_id', 'business_date', 'order_guid', 'weekday', 'hour', 'minutes'];
 const MIX_COLUMNS = [
   'location_id', 'business_date', 'dimension', 'label', 'orders', 'quantity', 'gross_sales',
   'discounts', 'net_sales',
@@ -54,6 +55,18 @@ export function mixStatements(locationId, date, sales, dimension) {
   return [
     `DELETE FROM sales_mix WHERE location_id=${lit(locationId)} AND business_date=${lit(date)} AND dimension=${lit(dimension)};`,
     ...insert('sales_mix', sales.mix.filter((r) => r.dimension === dimension).map((r) => ({ ...key, ...r })), MIX_COLUMNS),
+  ];
+}
+
+/**
+ * Replaces a location-day's ticket times and leaves every other table alone:
+ * loads KDS ticket times for days synced before they were collected.
+ */
+export function ticketStatements(locationId, date, sales) {
+  const key = { location_id: locationId, business_date: date };
+  return [
+    `DELETE FROM ticket_times WHERE location_id=${lit(locationId)} AND business_date=${lit(date)};`,
+    ...insert('ticket_times', (sales.tickets ?? []).map((r) => ({ ...key, ...r })), TICKET_COLUMNS),
   ];
 }
 
@@ -92,9 +105,7 @@ export function dayStatements(locationId, date, sales, labor, meta = {}) {
       ...insert('discount_sales', sales.discounts.map((r) => ({ ...key, ...r })), [
         'location_id', 'business_date', 'discount_name', 'approver', 'uses', 'amount',
       ]),
-      ...insert('ticket_times', (sales.tickets ?? []).map((r) => ({ ...key, ...r })), [
-        'location_id', 'business_date', 'order_guid', 'weekday', 'hour', 'minutes',
-      ]),
+      ...insert('ticket_times', (sales.tickets ?? []).map((r) => ({ ...key, ...r })), TICKET_COLUMNS),
     );
   }
   if (labor) {
