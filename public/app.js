@@ -64,7 +64,7 @@ function readState() {
     preset: PRESETS.some(([k]) => k === p.get('preset')) ? p.get('preset') : 'last7',
     start: p.get('start') || '',
     end: p.get('end') || '',
-    cmp: COMPARES.some(([k]) => k === p.get('cmp')) ? p.get('cmp') : 'yoy364',
+    cmp: COMPARES.some(([k]) => k === p.get('cmp')) ? p.get('cmp') : null,
     cstart: p.get('cstart') || '',
     cend: p.get('cend') || '',
     grain: ['day', 'week', 'month'].includes(p.get('grain')) ? p.get('grain') : null,
@@ -75,7 +75,19 @@ function readState() {
     Object.assign(s, presetRange('last7'));
   }
   if (!s.grain) s.grain = defaultGrain(s.preset === 'custom' ? s : presetRange(s.preset));
+  if (!s.cmp) s.cmp = defaultCompare(s.preset === 'custom' ? s : presetRange(s.preset));
   return s;
+}
+
+/**
+ * "Same period last year" only means something once every store has a year of
+ * sales. Until then last year is mostly empty, so default to the previous period.
+ */
+function defaultCompare(current) {
+  const firsts = allLocations.map((l) => l.first_sales_date);
+  if (!current?.start || !firsts.length || firsts.some((d) => !d)) return 'prev';
+  const lastYearStart = compareRange('yoy364', current).start;
+  return firsts.every((d) => d <= lastYearStart) ? 'yoy364' : 'prev';
 }
 
 function writeState() {
@@ -221,6 +233,18 @@ function historyWarning({ current, compare }) {
     `Totals and changes for ${partial.join(' and ')} are incomplete because earlier days aren't in the dashboard yet.`);
 }
 
+/** Says which selected stores hadn't opened yet during the comparison dates, so a flat comparison isn't mistaken for missing data. */
+function openingNotice({ compare }) {
+  if (!compare) return null;
+  const late = allLocations.filter((l) => state.locs.includes(l.id) && l.first_sales_date && l.first_sales_date > compare.start);
+  if (!late.length) return null;
+  const names = late.map((l) => `${l.name} (first sales ${fmtDateLong(l.first_sales_date)})`).join(', ');
+  return h('div', { class: 'notice' },
+    h('b', {}, 'Not open for all of the comparison dates: '),
+    `${names}. Their comparison numbers are $0 before they opened.`,
+    state.cmp === 'prev' ? '' : ' For a like-for-like comparison, compare to the previous period.');
+}
+
 async function render() {
   const seq = ++renderSeq;
   const view = $('view');
@@ -248,8 +272,8 @@ async function render() {
     const node = await tab.render(ctx);
     if (seq !== renderSeq) return; // a newer render started
     disposeCharts();
-    const warning = tab.id === 'admin' ? null : historyWarning(periods);
-    view.replaceChildren(...(warning ? [warning] : []), node);
+    const notices = tab.id === 'admin' ? [] : [historyWarning(periods), openingNotice(periods)].filter(Boolean);
+    view.replaceChildren(...notices, node);
   } catch (err) {
     if (seq !== renderSeq) return;
     disposeCharts();
