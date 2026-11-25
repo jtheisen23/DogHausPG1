@@ -83,9 +83,22 @@ async function kitchenProbe(toast, guid, date) {
   // Raw requests, so an empty or non-JSON reply is reported as it is.
   if (!toast.token || Date.now() >= toast.tokenExpiresAt) await toast.authenticate();
   const lines = [];
+  // Prep stations exist only where Toast KDS is set up (standard API access).
+  {
+    const res = await fetch(new URL(toast.host + '/kitchen/v1/published/prepStations'), {
+      headers: { Authorization: `Bearer ${toast.token}`, 'Toast-Restaurant-External-ID': guid, Accept: 'application/json' },
+    });
+    const text = await res.text();
+    let stations = null;
+    try { stations = JSON.parse(text); } catch { /* reported below */ }
+    const list = Array.isArray(stations) ? stations : Array.isArray(stations?.data) ? stations.data : null;
+    lines.push(list
+      ? `   KDS prep stations: HTTP ${res.status}, ${list.length} found${list.length ? ` (${list.map((x) => x?.name || x?.guid).filter(Boolean).slice(0, 12).join(', ')})` : ''}`
+      : `   KDS prep stations: HTTP ${res.status}, ${text.length} bytes${text ? `: ${text.replace(/\s+/g, ' ').slice(0, 200)}` : ' (empty body)'}`);
+  }
   let body = null;
   let used = null;
-  for (const d of [toToastDate(date), date]) {
+  for (const d of [toToastDate(date), toToastDate(addDays(date, -1))]) {
     const url = new URL(toast.host + path);
     url.searchParams.set('businessDate', d);
     const res = await fetch(url, {
