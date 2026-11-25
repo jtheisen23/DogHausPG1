@@ -11,6 +11,19 @@ test('hourly averages: orders and kitchen staff per date with orders in that hou
   assert.deepEqual(rows, [{ hour: 12, orders: 8, kitchenStaff: 2.5, median: 14 }]);
 });
 
+test('kitchen staff counts only the dates with orders in that hour; hours run from 4am', () => {
+  const rows = hourlyRows(
+    new Map([['2026-11-16|7', 1], ['2026-11-16|12', 10], ['2026-11-17|12', 6], ['2026-11-17|0', 2]]),
+    new Map([
+      ['2026-11-16|7', 1.5], ['2026-11-17|7', 2], ['2026-11-18|7', 2], // prep crew every morning, an order on one
+      ['2026-11-16|12', 3], ['2026-11-17|12', 2],
+      ['2026-11-17|0', 3], ['2026-11-18|0', 3], // closing crew; an order after midnight on one night
+    ]),
+    new Map(),
+  );
+  assert.deepEqual(rows.map((r) => [r.hour, r.kitchenStaff]), [[7, 1.5], [12, 2.5], [0, 3]]);
+});
+
 test('an hour averaging under 1 order is left out; no timed ticket gives a null median', () => {
   const rows = hourlyRows(
     new Map([['2026-11-16|12', 4], ['2026-11-16|23', 0], ['2026-11-16|13', 2]]),

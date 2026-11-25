@@ -206,8 +206,12 @@ const add = (map, key, v) => map.set(key, (map.get(key) || 0) + v);
 /**
  * Averages per hour of day. orders / kitchen: Map("date|hour" -> orders /
  * kitchen staff hours); tickets: Map("date|hour" -> [minutes]). An hour's
- * days are the dates with an order in it; hours averaging < 1 order are left
- * out. [{ hour, orders (1 dp), kitchenStaff (2 dp), median (1 dp) | null }].
+ * days are the dates with an order in it, and its kitchen staff counts only
+ * those dates' kitchen hours: prep or closing crew on days without orders in
+ * that hour would otherwise inflate early and late hours (one 7am order on one
+ * day plus a prep cook every morning read as dozens of cooks). Hours averaging
+ * < 1 order are left out; hours run in business-day order from 4am, so 12a
+ * follows 11p. [{ hour, orders (1 dp), kitchenStaff (2 dp), median (1 dp) | null }].
  */
 export function hourlyRows(orders, kitchen, tickets) {
   const days = new Map();
@@ -220,15 +224,16 @@ export function hourlyRows(orders, kitchen, tickets) {
     if (!days.has(hour)) days.set(hour, new Set());
     days.get(hour).add(d);
     add(ordc, hour, n);
+    add(kh, hour, kitchen.get(key) || 0);
   }
-  for (const [key, v] of kitchen) add(kh, Number(key.split('|')[1]), v);
   for (const [key, v] of tickets) {
     const hour = Number(key.split('|')[1]);
     if (!tks.has(hour)) tks.set(hour, []);
     tks.get(hour).push(...v);
   }
   const rows = [];
-  for (const hour of [...days.keys()].sort((a, b) => a - b)) {
+  const fromOpen = (h) => (h + 24 - CLOSEOUT_HOUR) % 24;
+  for (const hour of [...days.keys()].sort((a, b) => fromOpen(a) - fromOpen(b))) {
     const nd = days.get(hour).size || 1;
     const avg = (ordc.get(hour) || 0) / nd;
     if (avg < 1) continue;
