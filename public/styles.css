@@ -218,16 +218,24 @@ tr.total td { font-weight: 650; border-top: 1px solid var(--axis); border-bottom
 .ec-tip .key { display: inline-block; width: 12px; height: 2px; border-radius: 1px; margin-right: 6px; vertical-align: middle; }
 .ec-tip b { font-weight: 650; }
 
-/* Kitchen: ticket time heatmap ------------------------------------------- */
-#heatTable { border-collapse: separate; border-spacing: 3px; width: auto; min-width: 100%; }
-#heatTable th, #heatTable td { border: none; text-align: center; padding: 6px 4px; font-size: 12px; }
-#heatTable thead th { position: static; background: transparent; color: var(--muted); font-weight: 600; text-transform: none; letter-spacing: normal; cursor: default; }
-#heatTable th:first-child, #heatTable td:first-child { text-align: left; color: var(--text-2); font-weight: 600; }
-#heatTable td.cell { border-radius: 6px; color: #111; min-width: 34px; font-variant-numeric: tabular-nums; }
-#heatTable td.empty { background: var(--grid); opacity: .35; }
-#ticket-heatmap-card .legend { display: flex; flex-wrap: wrap; gap: 12px 18px; margin: 10px 0 10px; font-size: 12.5px; color: var(--text-2); }
-#ticket-heatmap-card .legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: middle; }
+/* Kitchen: heatmaps (ticket time, average orders) -------------------------- */
+table.heat { border-collapse: separate; border-spacing: 3px; width: auto; min-width: 100%; }
+table.heat th, table.heat td { border: none; text-align: center; padding: 6px 4px; font-size: 12px; }
+table.heat thead th { position: static; background: transparent; color: var(--muted); font-weight: 600; text-transform: none; letter-spacing: normal; cursor: default; }
+table.heat th:first-child, table.heat td:first-child { text-align: left; color: var(--text-2); font-weight: 600; }
+table.heat td.cell { border-radius: 6px; min-width: 30px; font-variant-numeric: tabular-nums; }
+table.heat td.empty { background: var(--grid); opacity: .35; }
+#heatTable td.cell { color: #111; min-width: 34px; }
+.heat-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; margin: 10px 0 10px; font-size: 12.5px; color: var(--text-2); }
+.heat-legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: middle; }
+.heat-legend .legend-end { font-size: 12px; color: var(--muted); }
+.oh-block { margin-top: 16px; }
+.oh-block:first-child { margin-top: 2px; }
+.oh-name { font-size: 13.5px; font-weight: 650; display: flex; align-items: center; margin: 0 2px 6px; }
+.oh-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 7px; }
 .heat-note { margin: 8px 2px 0; }
+.kitchen > * + * { margin-top: 16px; }
+.kitchen > .notice { margin-bottom: 0; }
 
 @media (max-width: 720px) {
   .topbar, .filters, .tabs, .view { padding-left: 16px; padding-right: 16px; }

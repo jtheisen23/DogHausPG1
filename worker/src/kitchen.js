@@ -1,14 +1,25 @@
-// Kitchen ticket-time heatmap (Kitchen tab). Ticket times come from the sync
-// (ticket_times: one row per order whose kitchen bumped it to READY on the
-// Toast KDS); this turns a location's rows into the weekday x hour grid.
+// Kitchen tab heatmaps (weekday x hour, local time, last 8 complete weeks):
+//  - ticket times: from ticket_times (one row per order whose kitchen bumped it
+//    to READY on the Toast KDS);
+//  - average orders: from hourly_sales (orders per business date and hour).
 
-/** Python-style round(x, digits): halves go to the even neighbour. */
+/**
+ * Python's round(x, digits), exactly: it rounds the double's true decimal
+ * value, and only true ties go to the even neighbour (round(0.15, 1) is 0.1
+ * because 0.15 is stored as 0.1499...; round(1.25, 1) is 1.2).
+ */
 export function roundHalfEven(x, digits = 0) {
-  const f = 10 ** digits;
-  const v = x * f;
-  const r = Math.round(v);
-  const isHalf = Math.abs(v - Math.trunc(v)) === 0.5;
-  return (isHalf && r % 2 !== 0 ? r - 1 : r) / f;
+  if (!Number.isFinite(x)) return x;
+  // toFixed works on the exact value of the double; 80 places hold all of it
+  // for the magnitudes used here (minutes, order counts, percentages).
+  const [int, frac] = Math.abs(x).toFixed(80).split('.');
+  let n = BigInt(int + frac.slice(0, digits));
+  const rest = frac.slice(digits);
+  const above = /[1-9]/.test(rest.slice(1));
+  if (rest[0] > '5' || (rest[0] === '5' && (above || n % 2n === 1n))) n += 1n;
+  const s = n.toString().padStart(digits + 1, '0');
+  const v = Number(digits ? `${s.slice(0, -digits)}.${s.slice(-digits)}` : s);
+  return x < 0 && v !== 0 ? -v : v;
 }
 
 function median(values) {
@@ -68,4 +79,69 @@ export function completedWeeks(today, weeks = 8) {
   const dow = (new Date(`${today}T00:00:00Z`).getUTCDay() + 6) % 7; // Monday = 0
   const end = addDays(today, -dow - 1); // the Sunday before this week
   return { start: addDays(end, -(weeks * 7 - 1)), end };
+}
+
+/** Monday = 0 ... Sunday = 6 for a YYYY-MM-DD date. */
+export function weekdayOf(date) {
+  return (new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7;
+}
+
+/**
+ * hourly_sales is keyed by Toast business date. Orders opened after midnight
+ * (before Toast's default 4am closeout) belong to the previous business date,
+ * but the heatmap buckets by the calendar date the order was opened on.
+ */
+export const CLOSEOUT_HOUR = 4;
+export function calendarDate(businessDate, hour) {
+  return hour < CLOSEOUT_HOUR ? addDays(businessDate, 1) : businessDate;
+}
+
+/**
+ * Average orders per (local weekday, hour). rows: [{ date (local calendar
+ * date), hour, orders }] with voided orders already left out. A weekday's
+ * operating dates are its dates with any order; a cell is that weekday-hour's
+ * orders / operating dates, kept only when the hour had orders on at least
+ * max(2, 40%) of those dates (so closed hours and stray orders stay blank).
+ * Returns { hours, cells: { "<wd>-<hour>": avg (1 dp) } } or null.
+ */
+export function buildOrdersHeatmap(rows, minOpenShare = 0.4) {
+  const counts = new Map(); // "date|hour" -> orders
+  for (const r of rows || []) {
+    const n = Number(r.orders) || 0;
+    if (n <= 0) continue;
+    const key = `${r.date}|${Number(r.hour)}`;
+    counts.set(key, (counts.get(key) || 0) + n);
+  }
+  if (!counts.size) return null;
+  const wdDates = new Map(); // weekday -> Set(dates)
+  const total = new Map(); // "wd-hour" -> orders
+  const days = new Map(); // "wd-hour" -> dates with orders
+  for (const [key, n] of counts) {
+    const [date, hour] = key.split('|');
+    const wd = weekdayOf(date);
+    if (!wdDates.has(wd)) wdDates.set(wd, new Set());
+    wdDates.get(wd).add(date);
+    const cell = `${wd}-${hour}`;
+    total.set(cell, (total.get(cell) || 0) + n);
+    days.set(cell, (days.get(cell) || 0) + 1);
+  }
+  const cells = {};
+  for (const [cell, n] of total) {
+    const occ = wdDates.get(Number(cell.split('-')[0]))?.size || 0;
+    if (!occ || days.get(cell) < Math.max(2, occ * minOpenShare)) continue;
+    cells[cell] = roundHalfEven(n / occ, 1);
+  }
+  const keys = Object.keys(cells);
+  if (!keys.length) return null;
+  const hours = [...new Set(keys.map((k) => Number(k.split('-')[1])))].sort((a, b) => a - b);
+  return { hours, cells };
+}
+
+/** One shared color-scale max across the locations shown, so grids compare. */
+export function ordersHeatmapPayload(byLoc, present) {
+  const locations = present.filter((id) => byLoc[id]);
+  if (!locations.length) return null;
+  const values = locations.flatMap((id) => Object.values(byLoc[id].cells));
+  const max = Math.max(0, ...values) || 1;
+  return { locations, byLoc: Object.fromEntries(locations.map((id) => [id, byLoc[id]])), max };
 }
