@@ -73,6 +73,67 @@ function ordersWithoutRevenueCenter(orders, ctx) {
   ];
 }
 
+/**
+ * Probes the Kitchen API (KDS ticket times) for one day. Read-only and
+ * informational: it reports what comes back so the data can be mapped before
+ * the sync stores any of it. Names of people are masked; the log may be public.
+ */
+async function kitchenProbe(toast, guid, date) {
+  const path = '/kitchen/v1/export/itemFulfillments';
+  let body = null;
+  let used = null;
+  let lastErr = null;
+  for (const d of [toToastDate(date), date]) {
+    try {
+      body = await toast.get(path, guid, { businessDate: d });
+      used = d;
+      break;
+    } catch (err) {
+      lastErr = err;
+      if (!/ 400 /.test(err.message)) break; // only a rejected date format is worth retrying
+    }
+  }
+  if (!body) {
+    return [`⚠️ **Kitchen (KDS)**: ${reason(lastErr)}. Ticket times need the API credential's **Kitchen** (kitchen:read) access, and Toast says this export needs its Restaurant Management subscription.`];
+  }
+  const records = Array.isArray(body) ? body : Array.isArray(body?.data) ? body.data : [];
+  const lines = [`✅ **Kitchen (KDS)** for ${date}: ${records.length} item fulfillments read (businessDate=${used}; response: ${Array.isArray(body) ? 'array' : `{${Object.keys(body || {}).join(', ')}}`}).`];
+  if (!records.length) {
+    lines.push("   No records. That's expected if the store doesn't use Toast KDS screens or was closed.");
+    return lines;
+  }
+  const keys = [...new Set(records.flatMap((r) => Object.keys(r || {})))];
+  lines.push(`   Fields: ${keys.join(', ')}`);
+  const isTime = (v) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(v);
+  const timeKeys = keys.filter((k) => records.some((r) => isTime(r?.[k])));
+  lines.push(`   Timestamp fields: ${timeKeys.join(', ') || 'none at the top level'}`);
+  const fired = timeKeys.find((k) => /fire|sent/i.test(k));
+  const done = timeKeys.find((k) => k !== fired && /fulfil|complete|done|bump|ready/i.test(k));
+  if (fired && done) {
+    const mins = records
+      .map((r) => (Date.parse(r[done]) - Date.parse(r[fired])) / 60000)
+      .filter((m) => Number.isFinite(m) && m >= 0)
+      .sort((a, b) => a - b);
+    const at = (q) => mins[Math.min(mins.length - 1, Math.floor(q * mins.length))];
+    if (mins.length) {
+      lines.push(`   ${fired} → ${done}: ${mins.length} items timed; median ${at(0.5).toFixed(1)} min, 90th percentile ${at(0.9).toFixed(1)} min, longest ${mins[mins.length - 1].toFixed(1)} min, over 10 min: ${mins.filter((m) => m > 10).length}.`);
+    }
+  }
+  for (const k of keys.filter((x) => /level|station|status|type/i.test(x))) {
+    const counts = new Map();
+    for (const r of records) {
+      const v = r?.[k];
+      const label = v && typeof v === 'object' ? (v.name || v.guid || JSON.stringify(v).slice(0, 40)) : String(v);
+      counts.set(label, (counts.get(label) || 0) + 1);
+    }
+    lines.push(`   ${k}: ${[...counts].slice(0, 8).map(([v, n]) => `${v} (${n})`).join(', ')}`);
+  }
+  const mask = (key, v) => (/employee|server|customer|guest|phone|email|firstname|lastname/i.test(key) && typeof v === 'string' ? '•••' : v);
+  const sample = JSON.stringify(records[0], mask);
+  lines.push(`   Sample record: ${sample.length > 700 ? `${sample.slice(0, 700)}…` : sample}`);
+  return lines;
+}
+
 async function main() {
   const locations = loadLocations(args.config);
   const toast = new ToastClient({
@@ -172,6 +233,12 @@ async function main() {
       if (sales?.daily.net_sales > 0 && cost > 0) out(`   Labor % that day: ${((cost / sales.daily.net_sales) * 100).toFixed(1)}%`);
     } catch (err) {
       out(`⚠️ **Labor**: ${reason(err)}. Enable **Labor** read access to see labor in the dashboard.`);
+    }
+
+    try {
+      for (const line of await kitchenProbe(toast, guid, date)) out(line);
+    } catch (err) {
+      out(`⚠️ **Kitchen (KDS)**: ${reason(err)}`);
     }
     out();
   }
