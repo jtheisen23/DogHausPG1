@@ -82,6 +82,9 @@ buttons (`--accent`), with location colors `--s1`…`--s8` starting from that go
    such as `HB` that the dashboard uses in permissions. `salariedLaborPerDay` (optional) adds
    salaried managers' daily cost to labor (e.g. the location's salaried pay per year ÷ 365). With
    7shifts it's only a fallback: salaried pay then comes from the managers' 7shifts wages.
+   `startDate` (optional, `YYYY-MM-DD`) is the store's opening day: nothing before it is synced or
+   backfilled, and anything already stored before it (test orders, training shifts) is removed on
+   the next sync.
 
 ### 2. Cloudflare database and Worker
 ```bash

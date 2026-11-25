@@ -18,7 +18,7 @@ import { addDays, eachDate, parseDate, todayIn, toToastDate } from './dates.js';
 import { loadLocations } from './config.js';
 import { ToastClient } from './toast.js';
 import { aggregateLabor, aggregateOrders } from './transform.js';
-import { dayStatements, mixStatements, upsertLocationsSql } from './sql.js';
+import { dayStatements, mixStatements, purgeBeforeStatements, upsertLocationsSql } from './sql.js';
 import { D1Sink, FileSink } from './sink.js';
 
 const { values: args } = parseArgs({
@@ -65,10 +65,16 @@ async function main() {
       });
   const overtimeMultiplier = Number(process.env.OVERTIME_MULTIPLIER || 1.5);
 
-  // Keep the locations table in step with config.
+  // Keep the locations table in step with config, and drop anything stored
+  // before a location's startDate (idempotent; writes nothing once clean).
   await sink.write(upsertLocationsSql(locations));
+  for (const loc of locations) if (loc.startDate) await sink.write(purgeBeforeStatements(loc.id, loc.startDate));
 
   const syncDay = async (loc, date, lookups) => {
+    if (loc.startDate && date < loc.startDate) {
+      log(`  ${loc.id} ${date}: before startDate ${loc.startDate}; skipped`);
+      return;
+    }
     const tz = loc.timezone || 'America/New_York';
     const toastDate = toToastDate(date);
     const orders = await toast.ordersForBusinessDate(loc.toastGuid, toastDate);
@@ -142,8 +148,10 @@ async function backfill({ locations, toast, sink, syncDay }) {
     const first = earliest.get(loc.id);
     // A location with nothing synced yet starts from yesterday.
     const next = first ? addDays(first, -1) : addDays(todayIn(loc.timezone || 'America/New_York'), -1);
-    if (next >= from) queue.push({ loc, next, lookups: null, done: 0 });
-    log(`${loc.id}: earliest synced ${first ?? 'none'}; ${next >= from ? `backfilling from ${next} toward ${from}` : 'history complete'}`);
+    // History for a location stops at its startDate when that is later than --from.
+    const floor = loc.startDate && loc.startDate > from ? loc.startDate : from;
+    if (next >= floor) queue.push({ loc, next, floor, lookups: null, done: 0 });
+    log(`${loc.id}: earliest synced ${first ?? 'none'}; ${next >= floor ? `backfilling from ${next} toward ${floor}` : 'history complete'}`);
   }
   if (!queue.length) {
     log(`Backfill complete: every location has data back to ${from}`);
@@ -167,7 +175,7 @@ async function backfill({ locations, toast, sink, syncDay }) {
         queue.splice(queue.indexOf(item), 1);
         continue;
       }
-      if (item.next < from) queue.splice(queue.indexOf(item), 1);
+      if (item.next < item.floor) queue.splice(queue.indexOf(item), 1);
     }
   }
   for (const loc of locations) {

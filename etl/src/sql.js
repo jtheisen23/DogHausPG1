@@ -63,6 +63,12 @@ export function mixStatements(locationId, date, sales, dimension) {
  * @param {object} sales       output of aggregateOrders (or null to leave sales untouched)
  * @param {object[]} labor     output of aggregateLabor (or null to leave labor untouched)
  */
+/** Removes a location's rows dated before its startDate (pre-opening test orders, training labor). */
+export function purgeBeforeStatements(locationId, startDate) {
+  const where = `WHERE location_id=${lit(locationId)} AND business_date < ${lit(startDate)}`;
+  return [...TABLES, 'scheduled_labor', 'log_book_posts', 'sync_log'].map((t) => `DELETE FROM ${t} ${where};`);
+}
+
 export function dayStatements(locationId, date, sales, labor, meta = {}) {
   const key = { location_id: locationId, business_date: date };
   const where = `WHERE location_id=${lit(locationId)} AND business_date=${lit(date)}`;

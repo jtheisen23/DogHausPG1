@@ -15,6 +15,10 @@ export function loadLocations(path = 'config/locations.json') {
   for (const l of locations) {
     if (!/^[A-Za-z0-9_-]{1,16}$/.test(l.id ?? '')) throw new Error(`Location id "${l.id}" must be 1-16 letters/digits`);
     if (!l.name) throw new Error(`Location ${l.id} needs a name`);
+    // Optional opening day: nothing before it is synced, and anything already stored before it is removed.
+    if (l.startDate !== undefined && !(/^\d{4}-\d{2}-\d{2}$/.test(l.startDate) && !Number.isNaN(Date.parse(`${l.startDate}T00:00:00Z`)))) {
+      throw new Error(`Location ${l.id} startDate "${l.startDate}" must be a date like 2026-11-12`);
+    }
   }
   return locations;
 }
