@@ -2,7 +2,9 @@
 // signed-in user is allowed to see, and each section checks its permission.
 
 import { HttpError, requireSection } from './auth.js';
-import { buildTicketHeatmap, completedWeeks, todayIn } from './kitchen.js';
+import {
+  buildOrdersHeatmap, buildTicketHeatmap, calendarDate, completedWeeks, ordersHeatmapPayload, todayIn,
+} from './kitchen.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_RANGE_DAYS = 1100;
@@ -455,4 +457,34 @@ export async function kitchen(env, url, user) {
     orders: orders.results[0]?.orders ?? 0,
     heatmap: buildTicketHeatmap(rows.results),
   };
+}
+
+/**
+ * Kitchen tab: average orders by local weekday and hour over each location's
+ * last 8 completed Monday-Sunday weeks, one grid per requested location, on a
+ * shared color scale. Needs no KDS: every location with orders has one.
+ */
+export async function orderHeatmap(env, url, user) {
+  requireSection(user, 'sales');
+  const allowed = new Set(user.locations);
+  const requested = (url.searchParams.get('locations') || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const ids = requested.length ? requested.filter((l) => allowed.has(l)) : [...allowed];
+  if (!ids.length) return { locations: [], byLoc: {}, max: 1, windows: {} };
+  const inList = ids.map(() => '?').join(',');
+  const { results: locs } = await env.DB.prepare(`SELECT id, timezone FROM locations WHERE id IN (${inList})`).bind(...ids).all();
+  const tzOf = new Map(locs.map((l) => [l.id, l.timezone || 'America/New_York']));
+  const present = ids.filter((id) => tzOf.has(id));
+  const windows = Object.fromEntries(present.map((id) => [id, completedWeeks(todayIn(tzOf.get(id)))]));
+  const results = present.length
+    ? await env.DB.batch(present.map((id) => env.DB
+      .prepare('SELECT business_date, hour, orders FROM hourly_sales WHERE location_id = ? AND business_date BETWEEN ? AND ? AND orders > 0')
+      .bind(id, windows[id].start, windows[id].end)))
+    : [];
+  const byLoc = {};
+  present.forEach((id, i) => {
+    const rows = results[i].results.map((r) => ({ date: calendarDate(r.business_date, r.hour), hour: r.hour, orders: r.orders }));
+    const heat = buildOrdersHeatmap(rows);
+    if (heat) byLoc[id] = heat;
+  });
+  return { windows, ...(ordersHeatmapPayload(byLoc, present) || { locations: [], byLoc: {}, max: 1 }) };
 }

@@ -1320,7 +1320,7 @@ function ticketHeatmapCard(data) {
         }, String(Math.round(c.median)))
         : h('td', { class: 'cell empty' });
     }))));
-  const legend = h('div', { class: 'legend', id: 'heat-legend' },
+  const legend = h('div', { class: 'legend heat-legend', id: 'heat-legend' },
     HEAT_LEGEND.map(([label, color]) => h('span', {}, h('span', { class: 'swatch', style: { background: color } }), `${label} min`)));
   const pct = data.orders ? ` (${Math.round((100 * data.timed) / data.orders)}%)` : '';
   const footnote = h('div', { class: 'small muted heat-note' },
@@ -1329,22 +1329,68 @@ function ticketHeatmapCard(data) {
     ['Ticket time by day & hour ', h('span', { class: 'muted', style: { fontWeight: '400' } }, '(estimated)')],
     'Median minutes from first item fired to last item ready, by weekday and hour (last 8 weeks). Redder = slower; blank = too few tickets.',
     null,
-    h('div', { class: 'table-wrap' }, h('table', { id: 'heatTable' }, head, body)),
+    h('div', { class: 'table-wrap' }, h('table', { id: 'heatTable', class: 'heat' }, head, body)),
     legend,
   );
   el.id = 'ticket-heatmap-card';
   return h('div', {}, el, footnote);
 }
 
-export async function kitchen(ctx) {
-  const ids = ctx.q.locations;
+// Average orders by hour & day: 5 blue bands scaled to the busiest cell shown.
+const ORDER_BANDS = [['#eaf1fb', '#111'], ['#cfe0f6', '#111'], ['#a6c8ee', '#111'], ['#6fa3df', '#fff'], ['#3f83cf', '#fff']];
+const ordersBand = (t) => ORDER_BANDS[Math.min(4, Math.max(0, Math.floor(t * 5)))];
+
+/**
+ * "Average orders by hour & day" card, matching the other brand's dashboard:
+ * one grid per location (name and color dot when there are several), all on
+ * one color scale. Returns null when no location has orders in the window.
+ */
+function ordersHeatmapCard(ctx, d) {
+  if (!d || !d.locations?.length) return null;
+  const max = d.max || 1;
+  const locs = [...d.locations].sort((a, b) => ctx.loc(a).colorIndex - ctx.loc(b).colorIndex);
+  const multi = locs.length > 1;
+  const blocks = locs.map((id) => {
+    const b = d.byLoc[id];
+    const name = ctx.loc(id).name;
+    const head = h('thead', {}, h('tr', {}, h('th', {}, 'Day'), b.hours.map((x) => h('th', {}, heatHour(x)))));
+    const body = h('tbody', {}, HEAT_DAYS.map((day, wd) => h('tr', {},
+      h('td', {}, day),
+      b.hours.map((x) => {
+        const v = b.cells[`${wd}-${x}`];
+        if (v == null) return h('td', { class: 'cell empty' });
+        const [bg, fg] = ordersBand(v / max);
+        return h('td', { class: 'cell', style: { background: bg, color: fg }, title: `${name} · ${day} ${heatHour(x)} · ${v} avg orders` }, String(v));
+      }))));
+    return h('div', { class: 'oh-block' },
+      multi ? h('div', { class: 'oh-name' },
+        h('span', { class: 'oh-dot', style: { background: `var(--s${(ctx.loc(id).colorIndex % 8) + 1})` } }), name) : null,
+      h('div', { class: 'table-wrap' }, h('table', { class: 'heat' }, head, body)));
+  });
+  const legend = h('div', { class: 'legend heat-legend', id: 'ordersheat-legend' },
+    h('span', { class: 'legend-end' }, 'Fewer'),
+    [0.1, 0.3, 0.5, 0.7, 0.9].map((t) => h('span', { class: 'swatch', style: { background: ordersBand(t)[0] } })),
+    h('span', { class: 'legend-end' }, 'More orders'));
+  const el = card(
+    'Average orders by hour & day',
+    'Average number of orders in each hour of the week (last 8 weeks, local time). Darker = busier; the lightest cells are the slowest hours. Blank = closed / too few.',
+    null,
+    h('div', { id: 'ordersheat-wrap' }, blocks),
+    legend,
+  );
+  el.id = 'ordersheat-card';
+  const w = d.windows?.[locs[0]];
+  return h('div', {}, el, w ? h('div', { class: 'small muted heat-note' }, `${fmtRange(w)} · complete Monday–Sunday weeks`) : null);
+}
+
+/** Ticket-time card for one location, or a note saying why there isn't one. */
+function ticketSection(ctx, ids, data) {
   // Ticket times are per location: the card only shows with one location selected.
   if (ids.length !== 1) {
     return h('div', { class: 'notice' },
-      h('b', {}, 'Pick one location. '),
-      'Ticket times are shown for one location at a time: Alt/⌘-click a location above to show only that one.');
+      h('b', {}, 'Ticket times: pick one location. '),
+      'They are shown for one location at a time: Alt/⌘-click a location above to show only that one.');
   }
-  const data = await ctx.api('/api/kitchen', { locations: ids[0] });
   const heat = ticketHeatmapCard(data);
   if (heat) return heat;
   const name = ctx.loc(ids[0]).name;
@@ -1354,4 +1400,13 @@ export async function kitchen(ctx) {
     data.timed
       ? `Only ${fmt.int(data.timed)} of its ${fmt.int(data.orders)} orders in ${range} were timed, too few for any hour.`
       : `None of its ${fmt.int(data.orders)} orders in ${range} had an item marked ready on the kitchen display. Ticket times only exist where the kitchen bumps tickets on the Toast KDS.`);
+}
+
+export async function kitchen(ctx) {
+  const ids = ctx.q.locations;
+  const [tickets, orders] = await Promise.all([
+    ids.length === 1 ? ctx.api('/api/kitchen', { locations: ids[0] }) : null,
+    ctx.api('/api/order-heatmap'),
+  ]);
+  return h('div', { class: 'kitchen' }, ticketSection(ctx, ids, tickets), ordersHeatmapCard(ctx, orders));
 }

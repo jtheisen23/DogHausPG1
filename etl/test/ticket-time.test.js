@@ -72,3 +72,17 @@ test('aggregateOrders lists one ticket per bumped order, in local weekday and ho
   assert.equal(sales.daily.orders, 2);
   assert.deepEqual(sales.tickets, [{ order_guid: 'a', weekday: 0, hour: 18, minutes: 15 }]);
 });
+
+test('hourly order counts (average orders heatmap) leave out voided orders', () => {
+  const order = (guid, opened, extra = {}) => ({
+    guid, openedDate: opened, numberOfGuests: 1, ...extra,
+    checks: [{ selections: [sel({ createdDate: opened })] }],
+  });
+  const sales = aggregateOrders([
+    order('a', '2026-11-23T18:05:00.000+0000'), // Mon 12:05pm Chicago
+    order('b', '2026-11-23T18:40:00.000+0000'),
+    order('c', '2026-11-23T18:45:00.000+0000', { voided: true }),
+    order('d', '2026-11-23T18:50:00.000+0000', { deleted: true }),
+  ], { timezone: 'America/Chicago', lookups: {} });
+  assert.deepEqual(sales.hourly.map((r) => [r.hour, r.orders]), [[12, 2]]);
+});
